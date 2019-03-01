@@ -1057,3 +1057,48 @@
     }());
 
 }(self));
+// 自定义polyfill，支持IE11
+/*if (!FileReader.prototype.readAsBinaryString) {
+  FileReader.prototype.readAsBinaryString = function (fileData) {
+    var binary = "";
+    var pt = this;
+    var reader = new FileReader();
+    reader.onload = function (e) {
+      var bytes = new Uint8Array(reader.result);
+      var length = bytes.byteLength;
+      for (var i = 0; i < length; i++) {
+        binary += String.fromCharCode(bytes[i]);
+      }
+      //pt.result  - readonly so assign binary
+      pt.content = binary;
+      layui.jquery(pt).trigger('onload');
+    }
+    reader.readAsArrayBuffer(fileData);
+  }
+}*/
+Object.values = Object.values ? Object.values : function(obj) {
+  var allowedTypes = ["[object String]", "[object Object]", "[object Array]", "[object Function]"];
+  var objType = Object.prototype.toString.call(obj);
+
+  if(obj === null || typeof obj === "undefined") {
+    throw new TypeError("Cannot convert undefined or null to object");
+  } else if(!~allowedTypes.indexOf(objType)) {
+    return [];
+  } else {
+    // if ES6 is supported
+    if (Object.keys) {
+      return Object.keys(obj).map(function (key) {
+        return obj[key];
+      });
+    }
+
+    var result = [];
+    for (var prop in obj) {
+      if (obj.hasOwnProperty(prop)) {
+        result.push(obj[prop]);
+      }
+    }
+
+    return result;
+  }
+};

@@ -1,541 +1,3 @@
-/*
-* @Author: Jeffrey Wang
-* @Desc:  整理强大的 SheetJS 功能，依赖 XLSX.js 和 FileSaver
-* @Version: v1.4
-* @Date:   2018-03-24 09:54:17
-* @Last Modified by:   Jeffrey Wang
-* @Last Modified time: 2019-01-15 11:49:09
-*/
-layui.define(['jquery'], function(exports){
-	var $ = layui.jquery;
-	exports('excel', {
-		/**
-		 * 兼容老版本的导出函数
-		 * @param  {[type]} data     [description]
-		 * @param  {[type]} filename [description]
-		 * @param  {[type]} type     [description]
-		 * @return {[type]}          [description]
-		 */
-		downloadExl: function(data, filename, type) {
-			type = type ? type : 'xlsx';
-			this.exportExcel({sheet1: data}, filename+'.'+type, type);
-		},
-		/**
-		 * 导出Excel并弹出下载框，具体使用方法和范围请参考文档
-		 * @param  {[type]} data     [description]
-		 * @param  {[type]} filename [description]
-		 * @param  {[type]} type     [description]
-		 * @param  {[type]} opt      [description]
-		 * @return {[type]}          [description]
-		 */
-		exportExcel : function(data, filename, type, opt) {
-			type = type ? type : 'xlsx';
-			filename = filename ? filename : '导出数据.'+type;
-
-			// 创建一个 XLSX 对象
-			var wb = XLSX.utils.book_new();
-			// 1. 定义excel对的基本属性
-			var Props = {
-				Title: filename,
-				Subject: 'Export From web browser',
-				Author: "excel.wj2015.com",
-				Manager: '',
-				Company: '',
-				Category: '',
-				Keywords: '',
-				Comments: '',
-				LastAuthor: '',
-				CreatedData: new Date(),
-			};
-			opt && opt.Props && (Props = $.extend(Props, opt.Props));
-			wb.Props = Props;
-			// 特殊属性实现，比如合并单元格
-			var wbExtend = {
-				'!merges': null
-				,'!margins': null
-				,'!cols': null
-				,'!rows': null
-				,'!protect': null
-				,'!autofilter': null
-			};
-			opt && opt.extend && (wbExtend = $.extend(wbExtend, opt.extend));
-			// 清理空配置
-			for (key in wbExtend) {
-				if (!wbExtend[key]) {
-					delete wbExtend[key];
-				}
-			}
-
-			// 判断 data 如果是 sheet 级别数据，自动加 sheet1
-			if ($.isArray(data)) {
-				data = {sheet1: data};
-			}
-
-			for(sheet_name in data) {
-				var content = data[sheet_name];
-				// 2. 设置sheet名称
-				wb.SheetNames.push(sheet_name);
-				// 3. 分配工作表对象到 sheet
-				var is_aoa = false;
-				if (content.length && content[0] && $.isArray(content[0])) {
-					is_aoa = true;
-				}
-				if (is_aoa) {
-					var ws = XLSX.utils.aoa_to_sheet(content);
-				} else {
-					var option = {};
-					if (content.length) {
-						option.headers = content.unshift();
-						option.skipHeader = true;
-						// 分离并重组样式
-						var splitRes = this.splitContent(content);
-					}
-					var ws = XLSX.utils.json_to_sheet(content, option);
-					// 特殊属性，支持单独设置某个sheet的属性
-					if (wbExtend[sheet_name]) {
-						$.extend(ws, wbExtend[sheet_name]);
-					} else {
-						$.extend(ws, wbExtend);
-					}
-					// 合并样式
-					if (typeof splitRes !== 'undefined') {
-						this.mergeCellOpt(ws, splitRes.style);
-					}
-				}
-				wb.Sheets[sheet_name] = ws;
-			};
-
-			// 4. 输出工作表
-			var wbout = XLSX.write(wb, {bookType: type, type: 'binary', cellStyles: true});
-
-			// 5. 跨浏览器支持，采用 FileSaver 三方库
-			saveAs(new Blob([this.s2ab(wbout)], {type: "application/octet-stream"}), filename);
-		},
-		/**
-		 * 分离内容和样式
-		 * @param  {[type]} content [description]
-		 * @return {[type]}         [description]
-		 */
-		splitContent: function(content) {
-			var styleContent = {};
-			// 扫描每个单元格，如果是对象则等表格转换完毕后分离出来重新赋值
-			for (line in content) {
-				var lineData = content[line];
-				var rowIndex = 0;
-				for (var row in lineData) {
-					var rowData = lineData[row];
-					var t = typeof rowData;
-					if (typeof rowData === 'object') {
-						// typeof null == object
-						if (rowData !== null) {
-							styleContent[this.numToTitle(rowIndex+1)+(parseInt(line)+1)] = rowData;
-						} else {
-							lineData[row] = '';
-						}
-					}
-					rowIndex++;
-				}
-			}
-			return {
-				content: content,
-				style: styleContent,
-			};
-		},
-		/**
-		 * 合并内容和样式
-		 * @param  {[type]} ws    [description]
-		 * @param  {[type]} style [description]
-		 * @return {[type]}       [description]
-		 */
-		mergeCellOpt: function(ws, style) {
-			for (var row in style) {
-				var rowOpt = style[row];
-				if (ws[row]) {
-					// 其他属性做一个初始化
-					var otherOpt = ['t', 'w', 'f', 'r', 'h', 'c', 'z', 'l', 's'];
-					for (var i in otherOpt) {
-						ws[row][otherOpt[i]] = ws[row][otherOpt[i]];
-					}
-					$.extend(ws[row], rowOpt);
-				}
-			}
-		},
-		// 测试代码：
-		// 		for(i=1;i<100;i++){var change = layui.excel.numToTitle(i);console.log(i, change, layui.excel.titleToNum(change));}
-		// numsToTitle备忘录提效
-		numsTitleCache: {},
-		// titleToTitle 备忘录提效
-		titleNumsCache: {},
-		/**
-		 * 将数字(从一开始)转换为 A、B、C...AA、AB
-		 * @param  {[int]} num [description]
-		 * @return {[type]}     [description]
-		 */
-		numToTitle: function(num) {
-			if (this.numsTitleCache[num]) {
-				return this.numsTitleCache[num];
-			}
-			var ans = '';
-			if (num > 26) {
-				// 要注意小心 26 的倍数导致的无线递归问题
-				var dec = num % 26;
-				ans = this.numToTitle((num - dec)/26) + this.numToTitle(dec?dec:26);
-				this.numsTitleCache[num] = ans;
-				this.titleNumsCache[ans] = num;
-				return ans;
-			} else {
-				// A 的 ascii 为 0，顺位相加
-				ans = String.fromCharCode(64 + num);
-				this.numsTitleCache[num] = ans;
-				this.titleNumsCache[ans] = num;
-				return ans;
-			}
-		},
-		/**
-		 * 将A、B、AA、ABC转换为 1、2、3形式的数字
-		 * @param  {[type]} title [description]
-		 * @return {[type]}       [description]
-		 */
-		titleToNum: function(title) {
-			if (this.titleNumsCache[title]) {
-				return this.titleNumsCache[title];
-			}
-			var len = title.length;
-			var total = 0;
-			for (var index in title) {
-				var char = title[index];
-				var code = char.charCodeAt() - 64;
-				total += code * Math.pow(26, len - index - 1);
-			}
-			this.numsTitleCache[total] = title;
-			this.titleNumsCache[title] = total;
-			return total;
-		},
-		/**
-		 * 批量设置单元格属性
-		 * @param  {[array]} data     [sheet级别的数据]
-		 * @param  {[string]} range		 [范围字符串，比如 A1:C12，开始位置默认 A1，结束位置默认整个表格右下角]
-		 * @param  {[object]} config   [批量设置的单元格属性]
-		 * @param  {[callback]} filter   [回调函数，传递函数生效，返回值作为新的值（可用于过滤、规则替换样式等骚操作）]
-		 * @return {[array]}          [重新渲染后的 sheet 数据]
-		 */
-		setExportCellStyle: function(data, range, config, filter) {
-			if (typeof data !== 'object' || !data.length || !data[0] || !Object.keys(data[0]).length) {
-				return [];
-			}
-
-			// 以 rowIndex 为键，field 为值
-			var fieldKeys = Object.keys(data[0]);
-			var maxCol = data.length -1;
-			var maxRow = fieldKeys.length - 1;
-			// 默认 A1 ~ 右下角
-			var startPos = {c: 0, r: 0};
-			var endPos = {c: maxCol, r: maxRow};
-
-			if (range && typeof range === 'string') {
-				var rangeArr = range.split(':');
-				if (rangeArr[0].length) {
-					startPos = this.splitPosition(rangeArr[0]);
-				}
-				if (typeof rangeArr[1] !== 'undefined' && rangeArr[1] !== '') {
-					endPos = this.splitPosition(rangeArr[1]);
-				}
-			} else {
-				// pass
-			}
-			// position范围限制 - 考虑到特殊情况取消此限制
-			// startPos.c = startPos.c < maxCol ? startPos.c : maxCol;
-			// endPos.c = endPos.c < maxCol ? endPos.c : maxCol;
-			// startPos.r = startPos.r < maxRow ? startPos.r : maxRow;
-			// endPos.r = endPos.r < maxRow ? endPos.r : maxRow;
-
-			if (startPos.c > endPos.c) {
-				console.error('开始列不得大于结束列');
-			}
-            if (startPos.r > endPos.r) {
-                console.error('开始行不得大于结束行');
-            }
-
-			// 遍历范围内的数据，进行样式设置，按从上到下从左到右按行遍历
-            for (var currentCol = startPos.c; currentCol <= endPos.c; currentCol++) {
-                for (var currentRow = startPos.r; currentRow <= endPos.r; currentRow++) {
-                    // 如果有回调则执行回调判断，否则全部更新，如果遇到超出数据范围的，自动置空
-					var row = data[currentCol];
-					if (!row) {
-						row = {};
-						for (var key in fieldKeys) {
-							row[fieldKeys[key]] = '';
-						}
-						data[currentCol] = row;
-					}
-					var cell = row[fieldKeys[currentRow]];
-					var newCell = null;
-                    if (cell === null || cell === undefined) {
-                        cell = '';
-                    }
-
-                    // 手工合并
-                    if (typeof cell === 'object') {
-                        newCell = $.extend(true, {}, cell, config);
-                    } else {
-                        newCell = $.extend(true, {}, {v: cell}, config);
-                    }
-
-					if (
-						typeof filter === 'function'
-					) {
-						newCell = filter(cell, newCell, row, config, currentRow, currentCol, fieldKeys[currentRow]);
-					} else {
-					}
-					// 回写
-					data[currentCol][fieldKeys[currentRow]] = newCell;
-                }
-            }
-            return data;
-		},
-		/**
-		 * 合并单元格快速生成配置的函数 传入 [ ['开始坐标 A1', '结束坐标 D2'], ['开始坐标 B2', '结束坐标 E3'] ]
-		 * @param  {[type]} origin [description]
-		 * @return {[type]}        [description]
-		 */
-		makeMergeConfig: function(origin) {
-			var merge = [];
-			for (var index in origin) {
-				merge.push({
-					s: this.splitPosition(origin[index][0]),
-					e: this.splitPosition(origin[index][1]),
-				});
-			}
-			return merge;
-		},
-		/**
-		 * 自动生成列宽配置
-		 * @param  {[type]} data    [description]
-		 * @param  {[type]} defaultNum [description]
-		 * @return {[type]}         [description]
-		 */
-		makeColConfig: function(data, defaultNum) {
-			defaultNum = defaultNum > 0 ? defaultNum : 50;
-			// 将列的 ABC 转换为 index
-			var change = [];
-			var startIndex = 0;
-			for (index in data) {
-				var item = data[index];
-				if (index.match && index.match(/[A-Z]*/)) {
-					var currentIndex = this.titleToNum(index) - 1;
-					// 填充未配置的单元格
-					while (startIndex < currentIndex) {
-						change.push({wpx: defaultNum});
-						startIndex++;
-					}
-					startIndex = currentIndex+1;
-					change.push({wpx: item > 0 ? item : defaultNum});
-				}
-			};
-			return change;
-		},
-		/**
-		 * 自动生成列高配置
-		 * @param  {[type]} data    [description]
-		 * @param  {[type]} defaultNum [description]
-		 * @return {[type]}         [description]
-		 */
-		makeRowConfig: function(data, defaultNum) {
-			defaultNum = defaultNum > 0 ? defaultNum : 10;
-			// 将列的 ABC 转换为 index
-			var change = [];
-			var startIndex = 0;
-			for (index in data) {
-				var item = data[index];
-				if (index.match && index.match(/[0-9]*/)) {
-					var currentIndex = parseInt(index) - 1;
-					// 填充未配置的行
-					while (startIndex < currentIndex) {
-						change.push({hpx: defaultNum});
-						startIndex++;
-					}
-					startIndex = currentIndex+1;
-					change.push({hpx: item > 0 ? item : defaultNum});
-				}
-			};
-			return change;
-		},
-		/**
-		 * 将A1分离成 {c: 0, r: 0} 格式的数据
-		 * @param  {[type]} pos [description]
-		 * @return {[type]}     [description]
-		 */
-		splitPosition: function(pos) {
-			var res = pos.match('^([A-Z]+)([0-9]+)$');
-			if (!res) {
-				return {c: 0, r: 0};
-			}
-			// 转换结果相比需要的结果需要减一转换
-			return {
-				c: this.titleToNum(res[1]) - 1,
-				r: parseInt(res[2]) - 1
-			}
-		},
-		/**
-		 * 将二进制数据转为8位字节
-		 * @param  {[type]} s [description]
-		 * @return {[type]}   [description]
-		 */
-		s2ab: function(s) {
-			var buf = new ArrayBuffer(s.length);
-			var view = new Uint8Array(buf);
-			for (var i = 0; i < s.length; i++) {
-				view[i] = s.charCodeAt(i) & 0xFF;
-			}
-			return buf;
-		},
-		/**
-		 * 将导出的数据格式，转换为可以aoa导出的格式
-		 * @return {[type]} [description]
-		 */
-		filterDataToAoaData: function(filterData){
-			var aoaData = [];
-			layui.each(filterData, function(index, item) {
-				var itemData = [];
-				for (var i in item) {
-					itemData.push(item[i]);
-				}
-				aoaData.push(itemData);
-			});
-			return aoaData;
-		},
-		/**
-		 * 梳理导出的数据，包括字段排序和多余数据过滤，具体功能请参见文档
-		 * @param  {[type]} data   [需要梳理的数据]
-		 * @param  {[type]} fields [支持数组和对象，用于映射关系和字段排序]
-		 * @return {[type]}        [description]
-		 */
-		filterExportData: function(data, fields) {
-			// PS:之所以不直接引用 data 节省内存，是因为担心如果 fields 可能存在如下情况： { "id": 'test_id', 'test_id': 'new_id' }，会导致处理异常
-			var exportData = [];
-			var true_fields = [];
-			// filed 支持两种模式，数组则单纯排序，对象则转换映射关系，为了统一处理，将数组转换为符合要求的映射关系对象
-			if (Array.isArray(fields)) {
-				for (var i in fields) {
-					true_fields[fields[i]] = fields[i];
-				}
-			} else {
-				true_fields = fields;
-			}
-			for (i in data) {
-				var item = data[i];
-				exportData[i] = {};
-				for (key in true_fields) {
-					var new_field_name = key;
-					var old_field_name = true_fields[key];
-					// 如果传入的是回调，则回调的值则为新值
-					if (typeof old_field_name === 'function' && old_field_name.apply) {
-						exportData[i][new_field_name] = old_field_name.apply(window, [item[new_field_name], item, data]);
-					} else {
-						if (typeof item[old_field_name] !== 'undefined') {
-							exportData[i][new_field_name] = item[old_field_name];
-						} else {
-							exportData[i][new_field_name] = '';
-						}
-					}
-				}
-			}
-			return exportData;
-		},
-		/**
-		 * 梳理导入的数据，参数意义可参考 filterExportData
-		 * @param  {[type]} data   [description]
-		 * @param  {[type]} fields [description]
-		 * @return {[type]}        [description]
-		 */
-		filterImportData: function(data, fields) {
-			var that = this;
-			layui.each(data, function(fileindex, xlsx) {
-				layui.each(xlsx, function(sheetname, content) {
-					xlsx[sheetname] = that.filterExportData(content, fields);
-				});
-			});
-			return data;
-		},
-		/**
-		 * 读取Excel，支持多文件多表格读取
-		 * @param  {[type]}   files    [description]
-		 * @param  {[type]}   opt      [description]
-		 * @param  {Function} callback [description]
-		 * @return {[type]}            [description]
-		 */
-		importExcel: function(files, opt, callback) {
-			var option = {
-				header: 'A',
-				range: null,
-				fields: null,
-			};
-			$.extend(option, opt);
-			var that = this;
-
-			if (files.length < 1) {
-				throw {code: 999, 'message': '传入文件为空'};
-			}
-			var supportReadMime = [
-				'application/vnd.ms-excel',
-				'application/msexcel',
-				'application/x-msexcel',
-				'application/x-ms-excel',
-				'application/x-excel',
-				'application/x-dos_ms_excel',
-				'application/xls',
-				'application/x-xls',
-				'application/vnd-xls',
-				'application/csv',
-				'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-				''
-			];
-			layui.each(files, function(index, item) {
-				if (supportReadMime.indexOf(item.type) === -1) {
-					throw {code: 999, message: item.name+'（'+item.type+'）为不支持的文件类型'};
-				}
-			});
-
-			// 按照二进制读取
-			var data = {};
-			layui.each(files, function(index, item) {
-				var reader = new FileReader();
-				if (!reader) {
-					throw {code: 999, message: '不支持FileReader，请更换更新的浏览器'};
-				}
-				// 读取excel表格对象
-				reader.onload = function(ev) {
-					var wb = XLSX.read(ev.target.result, {
-						type: 'binary'
-					});
-					var excelData = {};
-					layui.each(wb.Sheets, function(sheet, sheetObj) {
-						// 全为空的去掉
-						if (wb.Sheets.hasOwnProperty(sheet)) {
-							var opt = {
-								header: option.header
-							};
-							if (option.range) {
-								opt.range = option.range;
-							}
-							excelData[sheet] = XLSX.utils.sheet_to_json(sheetObj, opt);
-							// 支持梳理数据
-							if (option.fields) {
-								excelData[sheet] = that.filterExportData(excelData[sheet], option.fields);
-							}
-						}
-					});
-					data[index] = excelData;
-					// 全部读取完毕才执行
-					if (index === files.length - 1) {
-						callback && callback.apply && callback.apply(window, [data]);
-					}
-				};
-				reader.readAsBinaryString(item);
-			});
-		}
-	});
-});
 /* Blob.js
  * A Blob, File, FileReader & URL implementation.
  * 2018-08-09
@@ -1326,3 +788,1992 @@ XLSX.utils.sheet_add_json = sheet_add_json;
 XLSX.utils.json_to_sheet = json_to_sheet;
 XLSX.utils.aoa_to_sheet = aoa_to_sheet;
 })(typeof exports!=="undefined"?exports:XLSX);var XLS=XLSX;
+/*
+ Copyright (c) 2010, Linden Research, Inc.
+ Copyright (c) 2014, Joshua Bell
+
+ Permission is hereby granted, free of charge, to any person obtaining a copy
+ of this software and associated documentation files (the "Software"), to deal
+ in the Software without restriction, including without limitation the rights
+ to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ copies of the Software, and to permit persons to whom the Software is
+ furnished to do so, subject to the following conditions:
+
+ The above copyright notice and this permission notice shall be included in
+ all copies or substantial portions of the Software.
+
+ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ THE SOFTWARE.
+ $/LicenseInfo$
+ */
+
+// Original can be found at:
+//   https://bitbucket.org/lindenlab/llsd
+// Modifications by Joshua Bell inexorabletash@gmail.com
+//   https://github.com/inexorabletash/polyfill
+
+// ES3/ES5 implementation of the Krhonos Typed Array Specification
+//   Ref: http://www.khronos.org/registry/typedarray/specs/latest/
+//   Date: 2011-02-01
+//
+// Variations:
+//  * Allows typed_array.get/set() as alias for subscripts (typed_array[])
+//  * Gradually migrating structure from Khronos spec to ES2015 spec
+//
+// Caveats:
+//  * Beyond 10000 or so entries, polyfilled array accessors (ta[0],
+//    etc) become memory-prohibitive, so array creation will fail. Set
+//    self.TYPED_ARRAY_POLYFILL_NO_ARRAY_ACCESSORS=true to disable
+//    creation of accessors. Your code will need to use the
+//    non-standard get()/set() instead, and will need to add those to
+//    native arrays for interop.
+(function(global) {
+    'use strict';
+    var undefined = (void 0); // Paranoia
+
+    // Beyond this value, index getters/setters (i.e. array[0], array[1]) are so slow to
+    // create, and consume so much memory, that the browser appears frozen.
+    var MAX_ARRAY_LENGTH = 1e5;
+
+    // Approximations of internal ECMAScript conversion functions
+    function Type(v) {
+        switch(typeof v) {
+            case 'undefined': return 'undefined';
+            case 'boolean': return 'boolean';
+            case 'number': return 'number';
+            case 'string': return 'string';
+            default: return v === null ? 'null' : 'object';
+        }
+    }
+
+    // Class returns internal [[Class]] property, used to avoid cross-frame instanceof issues:
+    function Class(v) { return Object.prototype.toString.call(v).replace(/^\[object *|\]$/g, ''); }
+    function IsCallable(o) { return typeof o === 'function'; }
+    function ToObject(v) {
+        if (v === null || v === undefined) throw TypeError();
+        return Object(v);
+    }
+    function ToInt32(v) { return v >> 0; }
+    function ToUint32(v) { return v >>> 0; }
+
+    // Snapshot intrinsics
+    var LN2 = Math.LN2,
+        abs = Math.abs,
+        floor = Math.floor,
+        log = Math.log,
+        max = Math.max,
+        min = Math.min,
+        pow = Math.pow,
+        round = Math.round;
+
+    // emulate ES5 getter/setter API using legacy APIs
+    // http://blogs.msdn.com/b/ie/archive/2010/09/07/transitioning-existing-code-to-the-es5-getter-setter-apis.aspx
+    // (second clause tests for Object.defineProperty() in IE<9 that only supports extending DOM prototypes, but
+    // note that IE<9 does not support __defineGetter__ or __defineSetter__ so it just renders the method harmless)
+
+    (function() {
+        var orig = Object.defineProperty;
+        var dom_only = !(function(){try{return Object.defineProperty({},'x',{});}catch(_){return false;}}());
+
+        if (!orig || dom_only) {
+            Object.defineProperty = function (o, prop, desc) {
+                // In IE8 try built-in implementation for defining properties on DOM prototypes.
+                if (orig)
+                    try { return orig(o, prop, desc); } catch (_) {}
+                if (o !== Object(o))
+                    throw TypeError('Object.defineProperty called on non-object');
+                if (Object.prototype.__defineGetter__ && ('get' in desc))
+                    Object.prototype.__defineGetter__.call(o, prop, desc.get);
+                if (Object.prototype.__defineSetter__ && ('set' in desc))
+                    Object.prototype.__defineSetter__.call(o, prop, desc.set);
+                if ('value' in desc)
+                    o[prop] = desc.value;
+                return o;
+            };
+        }
+    }());
+
+    // ES5: Make obj[index] an alias for obj._getter(index)/obj._setter(index, value)
+    // for index in 0 ... obj.length
+    function makeArrayAccessors(obj) {
+        if ('TYPED_ARRAY_POLYFILL_NO_ARRAY_ACCESSORS' in global)
+            return;
+
+        if (obj.length > MAX_ARRAY_LENGTH) throw RangeError('Array too large for polyfill');
+
+        function makeArrayAccessor(index) {
+            Object.defineProperty(obj, index, {
+                'get': function() { return obj._getter(index); },
+                'set': function(v) { obj._setter(index, v); },
+                enumerable: true,
+                configurable: false
+            });
+        }
+
+        var i;
+        for (i = 0; i < obj.length; i += 1) {
+            makeArrayAccessor(i);
+        }
+    }
+
+    // Internal conversion functions:
+    //    pack<Type>()   - take a number (interpreted as Type), output a byte array
+    //    unpack<Type>() - take a byte array, output a Type-like number
+
+    function as_signed(value, bits) { var s = 32 - bits; return (value << s) >> s; }
+    function as_unsigned(value, bits) { var s = 32 - bits; return (value << s) >>> s; }
+
+    function packI8(n) { return [n & 0xff]; }
+    function unpackI8(bytes) { return as_signed(bytes[0], 8); }
+
+    function packU8(n) { return [n & 0xff]; }
+    function unpackU8(bytes) { return as_unsigned(bytes[0], 8); }
+
+    function packU8Clamped(n) { n = round(Number(n)); return [n < 0 ? 0 : n > 0xff ? 0xff : n & 0xff]; }
+
+    function packI16(n) { return [n & 0xff, (n >> 8) & 0xff]; }
+    function unpackI16(bytes) { return as_signed(bytes[1] << 8 | bytes[0], 16); }
+
+    function packU16(n) { return [n & 0xff, (n >> 8) & 0xff]; }
+    function unpackU16(bytes) { return as_unsigned(bytes[1] << 8 | bytes[0], 16); }
+
+    function packI32(n) { return [n & 0xff, (n >> 8) & 0xff, (n >> 16) & 0xff, (n >> 24) & 0xff]; }
+    function unpackI32(bytes) { return as_signed(bytes[3] << 24 | bytes[2] << 16 | bytes[1] << 8 | bytes[0], 32); }
+
+    function packU32(n) { return [n & 0xff, (n >> 8) & 0xff, (n >> 16) & 0xff, (n >> 24) & 0xff]; }
+    function unpackU32(bytes) { return as_unsigned(bytes[3] << 24 | bytes[2] << 16 | bytes[1] << 8 | bytes[0], 32); }
+
+    function packIEEE754(v, ebits, fbits) {
+
+        var bias = (1 << (ebits - 1)) - 1;
+
+        function roundToEven(n) {
+            var w = floor(n), f = n - w;
+            if (f < 0.5)
+                return w;
+            if (f > 0.5)
+                return w + 1;
+            return w % 2 ? w + 1 : w;
+        }
+
+        // Compute sign, exponent, fraction
+        var s, e, f;
+        if (v !== v) {
+            // NaN
+            // http://dev.w3.org/2006/webapi/WebIDL/#es-type-mapping
+            e = (1 << ebits) - 1; f = pow(2, fbits - 1); s = 0;
+        } else if (v === Infinity || v === -Infinity) {
+            e = (1 << ebits) - 1; f = 0; s = (v < 0) ? 1 : 0;
+        } else if (v === 0) {
+            e = 0; f = 0; s = (1 / v === -Infinity) ? 1 : 0;
+        } else {
+            s = v < 0;
+            v = abs(v);
+
+            if (v >= pow(2, 1 - bias)) {
+                // Normalized
+                e = min(floor(log(v) / LN2), 1023);
+                var significand = v / pow(2, e);
+                if (significand < 1) {
+                    e -= 1;
+                    significand *= 2;
+                }
+                if (significand >= 2) {
+                    e += 1;
+                    significand /= 2;
+                }
+                var d = pow(2, fbits);
+                f = roundToEven(significand * d) - d;
+                e += bias;
+                if (f / d >= 1) {
+                    e += 1;
+                    f = 0;
+                }
+                if (e > 2 * bias) {
+                    // Overflow
+                    e = (1 << ebits) - 1;
+                    f = 0;
+                }
+            } else {
+                // Denormalized
+                e = 0;
+                f = roundToEven(v / pow(2, 1 - bias - fbits));
+            }
+        }
+
+        // Pack sign, exponent, fraction
+        var bits = [], i;
+        for (i = fbits; i; i -= 1) { bits.push(f % 2 ? 1 : 0); f = floor(f / 2); }
+        for (i = ebits; i; i -= 1) { bits.push(e % 2 ? 1 : 0); e = floor(e / 2); }
+        bits.push(s ? 1 : 0);
+        bits.reverse();
+        var str = bits.join('');
+
+        // Bits to bytes
+        var bytes = [];
+        while (str.length) {
+            bytes.unshift(parseInt(str.substring(0, 8), 2));
+            str = str.substring(8);
+        }
+        return bytes;
+    }
+
+    function unpackIEEE754(bytes, ebits, fbits) {
+        // Bytes to bits
+        var bits = [], i, j, b, str,
+            bias, s, e, f;
+
+        for (i = 0; i < bytes.length; ++i) {
+            b = bytes[i];
+            for (j = 8; j; j -= 1) {
+                bits.push(b % 2 ? 1 : 0); b = b >> 1;
+            }
+        }
+        bits.reverse();
+        str = bits.join('');
+
+        // Unpack sign, exponent, fraction
+        bias = (1 << (ebits - 1)) - 1;
+        s = parseInt(str.substring(0, 1), 2) ? -1 : 1;
+        e = parseInt(str.substring(1, 1 + ebits), 2);
+        f = parseInt(str.substring(1 + ebits), 2);
+
+        // Produce number
+        if (e === (1 << ebits) - 1) {
+            return f !== 0 ? NaN : s * Infinity;
+        } else if (e > 0) {
+            // Normalized
+            return s * pow(2, e - bias) * (1 + f / pow(2, fbits));
+        } else if (f !== 0) {
+            // Denormalized
+            return s * pow(2, -(bias - 1)) * (f / pow(2, fbits));
+        } else {
+            return s < 0 ? -0 : 0;
+        }
+    }
+
+    function unpackF64(b) { return unpackIEEE754(b, 11, 52); }
+    function packF64(v) { return packIEEE754(v, 11, 52); }
+    function unpackF32(b) { return unpackIEEE754(b, 8, 23); }
+    function packF32(v) { return packIEEE754(v, 8, 23); }
+
+    //
+    // 3 The ArrayBuffer Type
+    //
+
+    (function() {
+
+        function ArrayBuffer(length) {
+            length = ToInt32(length);
+            if (length < 0) throw RangeError('ArrayBuffer size is not a small enough positive integer.');
+            Object.defineProperty(this, 'byteLength', {value: length});
+            Object.defineProperty(this, '_bytes', {value: Array(length)});
+
+            for (var i = 0; i < length; i += 1)
+                this._bytes[i] = 0;
+        }
+
+        global.ArrayBuffer = global.ArrayBuffer || ArrayBuffer;
+
+        //
+        // 5 The Typed Array View Types
+        //
+
+        function $TypedArray$() {
+
+            // %TypedArray% ( length )
+            if (!arguments.length || typeof arguments[0] !== 'object') {
+                return (function(length) {
+                    length = ToInt32(length);
+                    if (length < 0) throw RangeError('length is not a small enough positive integer.');
+                    Object.defineProperty(this, 'length', {value: length});
+                    Object.defineProperty(this, 'byteLength', {value: length * this.BYTES_PER_ELEMENT});
+                    Object.defineProperty(this, 'buffer', {value: new ArrayBuffer(this.byteLength)});
+                    Object.defineProperty(this, 'byteOffset', {value: 0});
+
+                }).apply(this, arguments);
+            }
+
+            // %TypedArray% ( typedArray )
+            if (arguments.length >= 1 &&
+                Type(arguments[0]) === 'object' &&
+                arguments[0] instanceof $TypedArray$) {
+                return (function(typedArray){
+                    if (this.constructor !== typedArray.constructor) throw TypeError();
+
+                    var byteLength = typedArray.length * this.BYTES_PER_ELEMENT;
+                    Object.defineProperty(this, 'buffer', {value: new ArrayBuffer(byteLength)});
+                    Object.defineProperty(this, 'byteLength', {value: byteLength});
+                    Object.defineProperty(this, 'byteOffset', {value: 0});
+                    Object.defineProperty(this, 'length', {value: typedArray.length});
+
+                    for (var i = 0; i < this.length; i += 1)
+                        this._setter(i, typedArray._getter(i));
+
+                }).apply(this, arguments);
+            }
+
+            // %TypedArray% ( array )
+            if (arguments.length >= 1 &&
+                Type(arguments[0]) === 'object' &&
+                !(arguments[0] instanceof $TypedArray$) &&
+                !(arguments[0] instanceof ArrayBuffer || Class(arguments[0]) === 'ArrayBuffer')) {
+                return (function(array) {
+
+                    var byteLength = array.length * this.BYTES_PER_ELEMENT;
+                    Object.defineProperty(this, 'buffer', {value: new ArrayBuffer(byteLength)});
+                    Object.defineProperty(this, 'byteLength', {value: byteLength});
+                    Object.defineProperty(this, 'byteOffset', {value: 0});
+                    Object.defineProperty(this, 'length', {value: array.length});
+
+                    for (var i = 0; i < this.length; i += 1) {
+                        var s = array[i];
+                        this._setter(i, Number(s));
+                    }
+                }).apply(this, arguments);
+            }
+
+            // %TypedArray% ( buffer, byteOffset=0, length=undefined )
+            if (arguments.length >= 1 &&
+                Type(arguments[0]) === 'object' &&
+                (arguments[0] instanceof ArrayBuffer || Class(arguments[0]) === 'ArrayBuffer')) {
+                return (function(buffer, byteOffset, length) {
+
+                    byteOffset = ToUint32(byteOffset);
+                    if (byteOffset > buffer.byteLength)
+                        throw RangeError('byteOffset out of range');
+
+                    // The given byteOffset must be a multiple of the element
+                    // size of the specific type, otherwise an exception is raised.
+                    if (byteOffset % this.BYTES_PER_ELEMENT)
+                        throw RangeError('buffer length minus the byteOffset is not a multiple of the element size.');
+
+                    if (length === undefined) {
+                        var byteLength = buffer.byteLength - byteOffset;
+                        if (byteLength % this.BYTES_PER_ELEMENT)
+                            throw RangeError('length of buffer minus byteOffset not a multiple of the element size');
+                        length = byteLength / this.BYTES_PER_ELEMENT;
+
+                    } else {
+                        length = ToUint32(length);
+                        byteLength = length * this.BYTES_PER_ELEMENT;
+                    }
+
+                    if ((byteOffset + byteLength) > buffer.byteLength)
+                        throw RangeError('byteOffset and length reference an area beyond the end of the buffer');
+
+                    Object.defineProperty(this, 'buffer', {value: buffer});
+                    Object.defineProperty(this, 'byteLength', {value: byteLength});
+                    Object.defineProperty(this, 'byteOffset', {value: byteOffset});
+                    Object.defineProperty(this, 'length', {value: length});
+
+                }).apply(this, arguments);
+            }
+
+            // %TypedArray% ( all other argument combinations )
+            throw TypeError();
+        }
+
+        // Properties of the %TypedArray Instrinsic Object
+
+        // %TypedArray%.from ( source , mapfn=undefined, thisArg=undefined )
+        Object.defineProperty($TypedArray$, 'from', {value: function(iterable) {
+            return new this(iterable);
+        }});
+
+        // %TypedArray%.of ( ...items )
+        Object.defineProperty($TypedArray$, 'of', {value: function(/*...items*/) {
+            return new this(arguments);
+        }});
+
+        // %TypedArray%.prototype
+        var $TypedArrayPrototype$ = {};
+        $TypedArray$.prototype = $TypedArrayPrototype$;
+
+        // WebIDL: getter type (unsigned long index);
+        Object.defineProperty($TypedArray$.prototype, '_getter', {value: function(index) {
+            if (arguments.length < 1) throw SyntaxError('Not enough arguments');
+
+            index = ToUint32(index);
+            if (index >= this.length)
+                return undefined;
+
+            var bytes = [], i, o;
+            for (i = 0, o = this.byteOffset + index * this.BYTES_PER_ELEMENT;
+                 i < this.BYTES_PER_ELEMENT;
+                 i += 1, o += 1) {
+                bytes.push(this.buffer._bytes[o]);
+            }
+            return this._unpack(bytes);
+        }});
+
+        // NONSTANDARD: convenience alias for getter: type get(unsigned long index);
+        Object.defineProperty($TypedArray$.prototype, 'get', {value: $TypedArray$.prototype._getter});
+
+        // WebIDL: setter void (unsigned long index, type value);
+        Object.defineProperty($TypedArray$.prototype, '_setter', {value: function(index, value) {
+            if (arguments.length < 2) throw SyntaxError('Not enough arguments');
+
+            index = ToUint32(index);
+            if (index >= this.length)
+                return;
+
+            var bytes = this._pack(value), i, o;
+            for (i = 0, o = this.byteOffset + index * this.BYTES_PER_ELEMENT;
+                 i < this.BYTES_PER_ELEMENT;
+                 i += 1, o += 1) {
+                this.buffer._bytes[o] = bytes[i];
+            }
+        }});
+
+        // get %TypedArray%.prototype.buffer
+        // get %TypedArray%.prototype.byteLength
+        // get %TypedArray%.prototype.byteOffset
+        // -- applied directly to the object in the constructor
+
+        // %TypedArray%.prototype.constructor
+        Object.defineProperty($TypedArray$.prototype, 'constructor', {value: $TypedArray$});
+
+        // %TypedArray%.prototype.copyWithin (target, start, end = this.length )
+        Object.defineProperty($TypedArray$.prototype, 'copyWithin', {value: function(target, start) {
+            var end = arguments[2];
+
+            var o = ToObject(this);
+            var lenVal = o.length;
+            var len = ToUint32(lenVal);
+            len = max(len, 0);
+            var relativeTarget = ToInt32(target);
+            var to;
+            if (relativeTarget < 0)
+                to = max(len + relativeTarget, 0);
+            else
+                to = min(relativeTarget, len);
+            var relativeStart = ToInt32(start);
+            var from;
+            if (relativeStart < 0)
+                from = max(len + relativeStart, 0);
+            else
+                from = min(relativeStart, len);
+            var relativeEnd;
+            if (end === undefined)
+                relativeEnd = len;
+            else
+                relativeEnd = ToInt32(end);
+            var final;
+            if (relativeEnd < 0)
+                final = max(len + relativeEnd, 0);
+            else
+                final = min(relativeEnd, len);
+            var count = min(final - from, len - to);
+            var direction;
+            if (from < to && to < from + count) {
+                direction = -1;
+                from = from + count - 1;
+                to = to + count - 1;
+            } else {
+                direction = 1;
+            }
+            while (count > 0) {
+                o._setter(to, o._getter(from));
+                from = from + direction;
+                to = to + direction;
+                count = count - 1;
+            }
+            return o;
+        }});
+
+        // %TypedArray%.prototype.entries ( )
+        // -- defined in es6.js to shim browsers w/ native TypedArrays
+
+        // %TypedArray%.prototype.every ( callbackfn, thisArg = undefined )
+        Object.defineProperty($TypedArray$.prototype, 'every', {value: function(callbackfn) {
+            if (this === undefined || this === null) throw TypeError();
+            var t = Object(this);
+            var len = ToUint32(t.length);
+            if (!IsCallable(callbackfn)) throw TypeError();
+            var thisArg = arguments[1];
+            for (var i = 0; i < len; i++) {
+                if (!callbackfn.call(thisArg, t._getter(i), i, t))
+                    return false;
+            }
+            return true;
+        }});
+
+        // %TypedArray%.prototype.fill (value, start = 0, end = this.length )
+        Object.defineProperty($TypedArray$.prototype, 'fill', {value: function(value) {
+            var start = arguments[1],
+                end = arguments[2];
+
+            var o = ToObject(this);
+            var lenVal = o.length;
+            var len = ToUint32(lenVal);
+            len = max(len, 0);
+            var relativeStart = ToInt32(start);
+            var k;
+            if (relativeStart < 0)
+                k = max((len + relativeStart), 0);
+            else
+                k = min(relativeStart, len);
+            var relativeEnd;
+            if (end === undefined)
+                relativeEnd = len;
+            else
+                relativeEnd = ToInt32(end);
+            var final;
+            if (relativeEnd < 0)
+                final = max((len + relativeEnd), 0);
+            else
+                final = min(relativeEnd, len);
+            while (k < final) {
+                o._setter(k, value);
+                k += 1;
+            }
+            return o;
+        }});
+
+        // %TypedArray%.prototype.filter ( callbackfn, thisArg = undefined )
+        Object.defineProperty($TypedArray$.prototype, 'filter', {value: function(callbackfn) {
+            if (this === undefined || this === null) throw TypeError();
+            var t = Object(this);
+            var len = ToUint32(t.length);
+            if (!IsCallable(callbackfn)) throw TypeError();
+            var res = [];
+            var thisp = arguments[1];
+            for (var i = 0; i < len; i++) {
+                var val = t._getter(i); // in case fun mutates this
+                if (callbackfn.call(thisp, val, i, t))
+                    res.push(val);
+            }
+            return new this.constructor(res);
+        }});
+
+        // %TypedArray%.prototype.find (predicate, thisArg = undefined)
+        Object.defineProperty($TypedArray$.prototype, 'find', {value: function(predicate) {
+            var o = ToObject(this);
+            var lenValue = o.length;
+            var len = ToUint32(lenValue);
+            if (!IsCallable(predicate)) throw TypeError();
+            var t = arguments.length > 1 ? arguments[1] : undefined;
+            var k = 0;
+            while (k < len) {
+                var kValue = o._getter(k);
+                var testResult = predicate.call(t, kValue, k, o);
+                if (Boolean(testResult))
+                    return kValue;
+                ++k;
+            }
+            return undefined;
+        }});
+
+        // %TypedArray%.prototype.findIndex ( predicate, thisArg = undefined )
+        Object.defineProperty($TypedArray$.prototype, 'findIndex', {value: function(predicate) {
+            var o = ToObject(this);
+            var lenValue = o.length;
+            var len = ToUint32(lenValue);
+            if (!IsCallable(predicate)) throw TypeError();
+            var t = arguments.length > 1 ? arguments[1] : undefined;
+            var k = 0;
+            while (k < len) {
+                var kValue = o._getter(k);
+                var testResult = predicate.call(t, kValue, k, o);
+                if (Boolean(testResult))
+                    return k;
+                ++k;
+            }
+            return -1;
+        }});
+
+        // %TypedArray%.prototype.forEach ( callbackfn, thisArg = undefined )
+        Object.defineProperty($TypedArray$.prototype, 'forEach', {value: function(callbackfn) {
+            if (this === undefined || this === null) throw TypeError();
+            var t = Object(this);
+            var len = ToUint32(t.length);
+            if (!IsCallable(callbackfn)) throw TypeError();
+            var thisp = arguments[1];
+            for (var i = 0; i < len; i++)
+                callbackfn.call(thisp, t._getter(i), i, t);
+        }});
+
+        // %TypedArray%.prototype.indexOf (searchElement, fromIndex = 0 )
+        Object.defineProperty($TypedArray$.prototype, 'indexOf', {value: function(searchElement) {
+            if (this === undefined || this === null) throw TypeError();
+            var t = Object(this);
+            var len = ToUint32(t.length);
+            if (len === 0) return -1;
+            var n = 0;
+            if (arguments.length > 0) {
+                n = Number(arguments[1]);
+                if (n !== n) {
+                    n = 0;
+                } else if (n !== 0 && n !== (1 / 0) && n !== -(1 / 0)) {
+                    n = (n > 0 || -1) * floor(abs(n));
+                }
+            }
+            if (n >= len) return -1;
+            var k = n >= 0 ? n : max(len - abs(n), 0);
+            for (; k < len; k++) {
+                if (t._getter(k) === searchElement) {
+                    return k;
+                }
+            }
+            return -1;
+        }});
+
+        // %TypedArray%.prototype.join ( separator )
+        Object.defineProperty($TypedArray$.prototype, 'join', {value: function(separator) {
+            if (this === undefined || this === null) throw TypeError();
+            var t = Object(this);
+            var len = ToUint32(t.length);
+            var tmp = Array(len);
+            for (var i = 0; i < len; ++i)
+                tmp[i] = t._getter(i);
+            return tmp.join(separator === undefined ? ',' : separator); // Hack for IE7
+        }});
+
+        // %TypedArray%.prototype.keys ( )
+        // -- defined in es6.js to shim browsers w/ native TypedArrays
+
+        // %TypedArray%.prototype.lastIndexOf ( searchElement, fromIndex = this.length-1 )
+        Object.defineProperty($TypedArray$.prototype, 'lastIndexOf', {value: function(searchElement) {
+            if (this === undefined || this === null) throw TypeError();
+            var t = Object(this);
+            var len = ToUint32(t.length);
+            if (len === 0) return -1;
+            var n = len;
+            if (arguments.length > 1) {
+                n = Number(arguments[1]);
+                if (n !== n) {
+                    n = 0;
+                } else if (n !== 0 && n !== (1 / 0) && n !== -(1 / 0)) {
+                    n = (n > 0 || -1) * floor(abs(n));
+                }
+            }
+            var k = n >= 0 ? min(n, len - 1) : len - abs(n);
+            for (; k >= 0; k--) {
+                if (t._getter(k) === searchElement)
+                    return k;
+            }
+            return -1;
+        }});
+
+        // get %TypedArray%.prototype.length
+        // -- applied directly to the object in the constructor
+
+        // %TypedArray%.prototype.map ( callbackfn, thisArg = undefined )
+        Object.defineProperty($TypedArray$.prototype, 'map', {value: function(callbackfn) {
+            if (this === undefined || this === null) throw TypeError();
+            var t = Object(this);
+            var len = ToUint32(t.length);
+            if (!IsCallable(callbackfn)) throw TypeError();
+            var res = []; res.length = len;
+            var thisp = arguments[1];
+            for (var i = 0; i < len; i++)
+                res[i] = callbackfn.call(thisp, t._getter(i), i, t);
+            return new this.constructor(res);
+        }});
+
+        // %TypedArray%.prototype.reduce ( callbackfn [, initialValue] )
+        Object.defineProperty($TypedArray$.prototype, 'reduce', {value: function(callbackfn) {
+            if (this === undefined || this === null) throw TypeError();
+            var t = Object(this);
+            var len = ToUint32(t.length);
+            if (!IsCallable(callbackfn)) throw TypeError();
+            // no value to return if no initial value and an empty array
+            if (len === 0 && arguments.length === 1) throw TypeError();
+            var k = 0;
+            var accumulator;
+            if (arguments.length >= 2) {
+                accumulator = arguments[1];
+            } else {
+                accumulator = t._getter(k++);
+            }
+            while (k < len) {
+                accumulator = callbackfn.call(undefined, accumulator, t._getter(k), k, t);
+                k++;
+            }
+            return accumulator;
+        }});
+
+        // %TypedArray%.prototype.reduceRight ( callbackfn [, initialValue] )
+        Object.defineProperty($TypedArray$.prototype, 'reduceRight', {value: function(callbackfn) {
+            if (this === undefined || this === null) throw TypeError();
+            var t = Object(this);
+            var len = ToUint32(t.length);
+            if (!IsCallable(callbackfn)) throw TypeError();
+            // no value to return if no initial value, empty array
+            if (len === 0 && arguments.length === 1) throw TypeError();
+            var k = len - 1;
+            var accumulator;
+            if (arguments.length >= 2) {
+                accumulator = arguments[1];
+            } else {
+                accumulator = t._getter(k--);
+            }
+            while (k >= 0) {
+                accumulator = callbackfn.call(undefined, accumulator, t._getter(k), k, t);
+                k--;
+            }
+            return accumulator;
+        }});
+
+        // %TypedArray%.prototype.reverse ( )
+        Object.defineProperty($TypedArray$.prototype, 'reverse', {value: function() {
+            if (this === undefined || this === null) throw TypeError();
+            var t = Object(this);
+            var len = ToUint32(t.length);
+            var half = floor(len / 2);
+            for (var i = 0, j = len - 1; i < half; ++i, --j) {
+                var tmp = t._getter(i);
+                t._setter(i, t._getter(j));
+                t._setter(j, tmp);
+            }
+            return t;
+        }});
+
+        // %TypedArray%.prototype.set(array, offset = 0 )
+        // %TypedArray%.prototype.set(typedArray, offset = 0 )
+        // WebIDL: void set(TypedArray array, optional unsigned long offset);
+        // WebIDL: void set(sequence<type> array, optional unsigned long offset);
+        Object.defineProperty($TypedArray$.prototype, 'set', {value: function(index, value) {
+            if (arguments.length < 1) throw SyntaxError('Not enough arguments');
+            var array, sequence, offset, len,
+                i, s, d,
+                byteOffset, byteLength, tmp;
+
+            if (typeof arguments[0] === 'object' && arguments[0].constructor === this.constructor) {
+                // void set(TypedArray array, optional unsigned long offset);
+                array = arguments[0];
+                offset = ToUint32(arguments[1]);
+
+                if (offset + array.length > this.length) {
+                    throw RangeError('Offset plus length of array is out of range');
+                }
+
+                byteOffset = this.byteOffset + offset * this.BYTES_PER_ELEMENT;
+                byteLength = array.length * this.BYTES_PER_ELEMENT;
+
+                if (array.buffer === this.buffer) {
+                    tmp = [];
+                    for (i = 0, s = array.byteOffset; i < byteLength; i += 1, s += 1) {
+                        tmp[i] = array.buffer._bytes[s];
+                    }
+                    for (i = 0, d = byteOffset; i < byteLength; i += 1, d += 1) {
+                        this.buffer._bytes[d] = tmp[i];
+                    }
+                } else {
+                    for (i = 0, s = array.byteOffset, d = byteOffset;
+                         i < byteLength; i += 1, s += 1, d += 1) {
+                        this.buffer._bytes[d] = array.buffer._bytes[s];
+                    }
+                }
+            } else if (typeof arguments[0] === 'object' && typeof arguments[0].length !== 'undefined') {
+                // void set(sequence<type> array, optional unsigned long offset);
+                sequence = arguments[0];
+                len = ToUint32(sequence.length);
+                offset = ToUint32(arguments[1]);
+
+                if (offset + len > this.length) {
+                    throw RangeError('Offset plus length of array is out of range');
+                }
+
+                for (i = 0; i < len; i += 1) {
+                    s = sequence[i];
+                    this._setter(offset + i, Number(s));
+                }
+            } else {
+                throw TypeError('Unexpected argument type(s)');
+            }
+        }});
+
+        // %TypedArray%.prototype.slice ( start, end )
+        Object.defineProperty($TypedArray$.prototype, 'slice', {value: function(start, end) {
+            var o = ToObject(this);
+            var lenVal = o.length;
+            var len = ToUint32(lenVal);
+            var relativeStart = ToInt32(start);
+            var k = (relativeStart < 0) ? max(len + relativeStart, 0) : min(relativeStart, len);
+            var relativeEnd = (end === undefined) ? len : ToInt32(end);
+            var final = (relativeEnd < 0) ? max(len + relativeEnd, 0) : min(relativeEnd, len);
+            var count = final - k;
+            var c = o.constructor;
+            var a = new c(count);
+            var n = 0;
+            while (k < final) {
+                var kValue = o._getter(k);
+                a._setter(n, kValue);
+                ++k;
+                ++n;
+            }
+            return a;
+        }});
+
+        // %TypedArray%.prototype.some ( callbackfn, thisArg = undefined )
+        Object.defineProperty($TypedArray$.prototype, 'some', {value: function(callbackfn) {
+            if (this === undefined || this === null) throw TypeError();
+            var t = Object(this);
+            var len = ToUint32(t.length);
+            if (!IsCallable(callbackfn)) throw TypeError();
+            var thisp = arguments[1];
+            for (var i = 0; i < len; i++) {
+                if (callbackfn.call(thisp, t._getter(i), i, t)) {
+                    return true;
+                }
+            }
+            return false;
+        }});
+
+        // %TypedArray%.prototype.sort ( comparefn )
+        Object.defineProperty($TypedArray$.prototype, 'sort', {value: function(comparefn) {
+            if (this === undefined || this === null) throw TypeError();
+            var t = Object(this);
+            var len = ToUint32(t.length);
+            var tmp = Array(len);
+            for (var i = 0; i < len; ++i)
+                tmp[i] = t._getter(i);
+            function sortCompare(x, y) {
+                if (x !== x && y !== y) return +0;
+                if (x !== x) return 1;
+                if (y !== y) return -1;
+                if (comparefn !== undefined) {
+                    return comparefn(x, y);
+                }
+                if (x < y) return -1;
+                if (x > y) return 1;
+                return +0;
+            }
+            tmp.sort(sortCompare);
+            for (i = 0; i < len; ++i)
+                t._setter(i, tmp[i]);
+            return t;
+        }});
+
+        // %TypedArray%.prototype.subarray(begin = 0, end = this.length )
+        // WebIDL: TypedArray subarray(long begin, optional long end);
+        Object.defineProperty($TypedArray$.prototype, 'subarray', {value: function(start, end) {
+            function clamp(v, min, max) { return v < min ? min : v > max ? max : v; }
+
+            start = ToInt32(start);
+            end = ToInt32(end);
+
+            if (arguments.length < 1) { start = 0; }
+            if (arguments.length < 2) { end = this.length; }
+
+            if (start < 0) { start = this.length + start; }
+            if (end < 0) { end = this.length + end; }
+
+            start = clamp(start, 0, this.length);
+            end = clamp(end, 0, this.length);
+
+            var len = end - start;
+            if (len < 0) {
+                len = 0;
+            }
+
+            return new this.constructor(
+                this.buffer, this.byteOffset + start * this.BYTES_PER_ELEMENT, len);
+        }});
+
+        // %TypedArray%.prototype.toLocaleString ( )
+        // %TypedArray%.prototype.toString ( )
+        // %TypedArray%.prototype.values ( )
+        // %TypedArray%.prototype [ @@iterator ] ( )
+        // get %TypedArray%.prototype [ @@toStringTag ]
+        // -- defined in es6.js to shim browsers w/ native TypedArrays
+
+        function makeTypedArray(elementSize, pack, unpack) {
+            // Each TypedArray type requires a distinct constructor instance with
+            // identical logic, which this produces.
+            var TypedArray = function() {
+                Object.defineProperty(this, 'constructor', {value: TypedArray});
+                $TypedArray$.apply(this, arguments);
+                makeArrayAccessors(this);
+            };
+            if ('__proto__' in TypedArray) {
+                TypedArray.__proto__ = $TypedArray$;
+            } else {
+                TypedArray.from = $TypedArray$.from;
+                TypedArray.of = $TypedArray$.of;
+            }
+
+            TypedArray.BYTES_PER_ELEMENT = elementSize;
+
+            var TypedArrayPrototype = function() {};
+            TypedArrayPrototype.prototype = $TypedArrayPrototype$;
+
+            TypedArray.prototype = new TypedArrayPrototype();
+
+            Object.defineProperty(TypedArray.prototype, 'BYTES_PER_ELEMENT', {value: elementSize});
+            Object.defineProperty(TypedArray.prototype, '_pack', {value: pack});
+            Object.defineProperty(TypedArray.prototype, '_unpack', {value: unpack});
+
+            return TypedArray;
+        }
+
+        var Int8Array = makeTypedArray(1, packI8, unpackI8);
+        var Uint8Array = makeTypedArray(1, packU8, unpackU8);
+        var Uint8ClampedArray = makeTypedArray(1, packU8Clamped, unpackU8);
+        var Int16Array = makeTypedArray(2, packI16, unpackI16);
+        var Uint16Array = makeTypedArray(2, packU16, unpackU16);
+        var Int32Array = makeTypedArray(4, packI32, unpackI32);
+        var Uint32Array = makeTypedArray(4, packU32, unpackU32);
+        var Float32Array = makeTypedArray(4, packF32, unpackF32);
+        var Float64Array = makeTypedArray(8, packF64, unpackF64);
+
+        global.Int8Array = global.Int8Array || Int8Array;
+        global.Uint8Array = global.Uint8Array || Uint8Array;
+        global.Uint8ClampedArray = global.Uint8ClampedArray || Uint8ClampedArray;
+        global.Int16Array = global.Int16Array || Int16Array;
+        global.Uint16Array = global.Uint16Array || Uint16Array;
+        global.Int32Array = global.Int32Array || Int32Array;
+        global.Uint32Array = global.Uint32Array || Uint32Array;
+        global.Float32Array = global.Float32Array || Float32Array;
+        global.Float64Array = global.Float64Array || Float64Array;
+    }());
+
+    //
+    // 6 The DataView View Type
+    //
+
+    (function() {
+        function r(array, index) {
+            return IsCallable(array.get) ? array.get(index) : array[index];
+        }
+
+        var IS_BIG_ENDIAN = (function() {
+            var u16array = new Uint16Array([0x1234]),
+                u8array = new Uint8Array(u16array.buffer);
+            return r(u8array, 0) === 0x12;
+        }());
+
+        // DataView(buffer, byteOffset=0, byteLength=undefined)
+        // WebIDL: Constructor(ArrayBuffer buffer,
+        //                     optional unsigned long byteOffset,
+        //                     optional unsigned long byteLength)
+        function DataView(buffer, byteOffset, byteLength) {
+            if (!(buffer instanceof ArrayBuffer || Class(buffer) === 'ArrayBuffer')) throw TypeError();
+
+            byteOffset = ToUint32(byteOffset);
+            if (byteOffset > buffer.byteLength)
+                throw RangeError('byteOffset out of range');
+
+            if (byteLength === undefined)
+                byteLength = buffer.byteLength - byteOffset;
+            else
+                byteLength = ToUint32(byteLength);
+
+            if ((byteOffset + byteLength) > buffer.byteLength)
+                throw RangeError('byteOffset and length reference an area beyond the end of the buffer');
+
+            Object.defineProperty(this, 'buffer', {value: buffer});
+            Object.defineProperty(this, 'byteLength', {value: byteLength});
+            Object.defineProperty(this, 'byteOffset', {value: byteOffset});
+        };
+
+        // get DataView.prototype.buffer
+        // get DataView.prototype.byteLength
+        // get DataView.prototype.byteOffset
+        // -- applied directly to instances by the constructor
+
+        function makeGetter(arrayType) {
+            return function GetViewValue(byteOffset, littleEndian) {
+                byteOffset = ToUint32(byteOffset);
+
+                if (byteOffset + arrayType.BYTES_PER_ELEMENT > this.byteLength)
+                    throw RangeError('Array index out of range');
+
+                byteOffset += this.byteOffset;
+
+                var uint8Array = new Uint8Array(this.buffer, byteOffset, arrayType.BYTES_PER_ELEMENT),
+                    bytes = [];
+                for (var i = 0; i < arrayType.BYTES_PER_ELEMENT; i += 1)
+                    bytes.push(r(uint8Array, i));
+
+                if (Boolean(littleEndian) === Boolean(IS_BIG_ENDIAN))
+                    bytes.reverse();
+
+                return r(new arrayType(new Uint8Array(bytes).buffer), 0);
+            };
+        }
+
+        Object.defineProperty(DataView.prototype, 'getUint8', {value: makeGetter(Uint8Array)});
+        Object.defineProperty(DataView.prototype, 'getInt8', {value: makeGetter(Int8Array)});
+        Object.defineProperty(DataView.prototype, 'getUint16', {value: makeGetter(Uint16Array)});
+        Object.defineProperty(DataView.prototype, 'getInt16', {value: makeGetter(Int16Array)});
+        Object.defineProperty(DataView.prototype, 'getUint32', {value: makeGetter(Uint32Array)});
+        Object.defineProperty(DataView.prototype, 'getInt32', {value: makeGetter(Int32Array)});
+        Object.defineProperty(DataView.prototype, 'getFloat32', {value: makeGetter(Float32Array)});
+        Object.defineProperty(DataView.prototype, 'getFloat64', {value: makeGetter(Float64Array)});
+
+        function makeSetter(arrayType) {
+            return function SetViewValue(byteOffset, value, littleEndian) {
+                byteOffset = ToUint32(byteOffset);
+                if (byteOffset + arrayType.BYTES_PER_ELEMENT > this.byteLength)
+                    throw RangeError('Array index out of range');
+
+                // Get bytes
+                var typeArray = new arrayType([value]),
+                    byteArray = new Uint8Array(typeArray.buffer),
+                    bytes = [], i, byteView;
+
+                for (i = 0; i < arrayType.BYTES_PER_ELEMENT; i += 1)
+                    bytes.push(r(byteArray, i));
+
+                // Flip if necessary
+                if (Boolean(littleEndian) === Boolean(IS_BIG_ENDIAN))
+                    bytes.reverse();
+
+                // Write them
+                byteView = new Uint8Array(this.buffer, byteOffset, arrayType.BYTES_PER_ELEMENT);
+                byteView.set(bytes);
+            };
+        }
+
+        Object.defineProperty(DataView.prototype, 'setUint8', {value: makeSetter(Uint8Array)});
+        Object.defineProperty(DataView.prototype, 'setInt8', {value: makeSetter(Int8Array)});
+        Object.defineProperty(DataView.prototype, 'setUint16', {value: makeSetter(Uint16Array)});
+        Object.defineProperty(DataView.prototype, 'setInt16', {value: makeSetter(Int16Array)});
+        Object.defineProperty(DataView.prototype, 'setUint32', {value: makeSetter(Uint32Array)});
+        Object.defineProperty(DataView.prototype, 'setInt32', {value: makeSetter(Int32Array)});
+        Object.defineProperty(DataView.prototype, 'setFloat32', {value: makeSetter(Float32Array)});
+        Object.defineProperty(DataView.prototype, 'setFloat64', {value: makeSetter(Float64Array)});
+
+        global.DataView = global.DataView || DataView;
+
+    }());
+
+}(self));
+// 自定义polyfill，支持IE11
+/*if (!FileReader.prototype.readAsBinaryString) {
+  FileReader.prototype.readAsBinaryString = function (fileData) {
+    var binary = "";
+    var pt = this;
+    var reader = new FileReader();
+    reader.onload = function (e) {
+      var bytes = new Uint8Array(reader.result);
+      var length = bytes.byteLength;
+      for (var i = 0; i < length; i++) {
+        binary += String.fromCharCode(bytes[i]);
+      }
+      //pt.result  - readonly so assign binary
+      pt.content = binary;
+      layui.jquery(pt).trigger('onload');
+    }
+    reader.readAsArrayBuffer(fileData);
+  }
+}*/
+Object.values = Object.values ? Object.values : function(obj) {
+  var allowedTypes = ["[object String]", "[object Object]", "[object Array]", "[object Function]"];
+  var objType = Object.prototype.toString.call(obj);
+
+  if(obj === null || typeof obj === "undefined") {
+    throw new TypeError("Cannot convert undefined or null to object");
+  } else if(!~allowedTypes.indexOf(objType)) {
+    return [];
+  } else {
+    // if ES6 is supported
+    if (Object.keys) {
+      return Object.keys(obj).map(function (key) {
+        return obj[key];
+      });
+    }
+
+    var result = [];
+    for (var prop in obj) {
+      if (obj.hasOwnProperty(prop)) {
+        result.push(obj[prop]);
+      }
+    }
+
+    return result;
+  }
+};
+/**
+ * dropfile.js
+ * A free to use drop file polyfill which adds FileReader to sites which don't have the FileAPI
+ *
+ * @license MIT
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining
+ * a copy of this software and associated documentation files (the
+ * "Software"), to deal in the Software without restriction, including
+ * without limitation the rights to use, copy, modify, merge, publish,
+ * distribute, sublicense, and/or sell copies of the Software, and to
+ * permit persons to whom the Software is furnished to do so, subject to
+ * the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be
+ * included in all copies or substantial portions of the Software.
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+ * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+ * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+ * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
+ * LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+ * OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+ * WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ *
+ *
+ * @author Andrew Dodson (drew81.com)
+ * @since Dec/2010
+ */
+
+
+// Silverlightjs see http://code.msdn.microsoft.com/silverlightjs
+//v4.0.50401.0
+if (!window.Silverlight) window.Silverlight = {}; Silverlight._silverlightCount = 0; Silverlight.__onSilverlightInstalledCalled = false; Silverlight.fwlinkRoot = "http://go2.microsoft.com/fwlink/?LinkID="; Silverlight.__installationEventFired = false; Silverlight.onGetSilverlight = null; Silverlight.onSilverlightInstalled = function () { window.location.reload(false) }; Silverlight.isInstalled = function (b) { if (b == undefined) b = null; var a = false, m = null; try { var i = null, j = false; if (window.ActiveXObject) try { i = new ActiveXObject("AgControl.AgControl"); if (b === null) a = true; else if (i.IsVersionSupported(b)) a = true; i = null } catch (l) { j = true } else j = true; if (j) { var k = navigator.plugins["Silverlight Plug-In"]; if (k) if (b === null) a = true; else { var h = k.description; if (h === "1.0.30226.2") h = "2.0.30226.2"; var c = h.split("."); while (c.length > 3) c.pop(); while (c.length < 4) c.push(0); var e = b.split("."); while (e.length > 4) e.pop(); var d, g, f = 0; do { d = parseInt(e[f]); g = parseInt(c[f]); f++ } while (f < e.length && d === g); if (d <= g && !isNaN(d)) a = true } } } catch (l) { a = false } return a }; Silverlight.WaitForInstallCompletion = function () { if (!Silverlight.isBrowserRestartRequired && Silverlight.onSilverlightInstalled) { try { navigator.plugins.refresh() } catch (a) { } if (Silverlight.isInstalled(null) && !Silverlight.__onSilverlightInstalledCalled) { Silverlight.onSilverlightInstalled(); Silverlight.__onSilverlightInstalledCalled = true } else setTimeout(Silverlight.WaitForInstallCompletion, 3e3) } }; Silverlight.__startup = function () { navigator.plugins.refresh(); Silverlight.isBrowserRestartRequired = Silverlight.isInstalled(null); if (!Silverlight.isBrowserRestartRequired) { Silverlight.WaitForInstallCompletion(); if (!Silverlight.__installationEventFired) { Silverlight.onInstallRequired(); Silverlight.__installationEventFired = true } } else if (window.navigator.mimeTypes) { var b = navigator.mimeTypes["application/x-silverlight-2"], c = navigator.mimeTypes["application/x-silverlight-2-b2"], d = navigator.mimeTypes["application/x-silverlight-2-b1"], a = d; if (c) a = c; if (!b && (d || c)) { if (!Silverlight.__installationEventFired) { Silverlight.onUpgradeRequired(); Silverlight.__installationEventFired = true } } else if (b && a) if (b.enabledPlugin && a.enabledPlugin) if (b.enabledPlugin.description != a.enabledPlugin.description) if (!Silverlight.__installationEventFired) { Silverlight.onRestartRequired(); Silverlight.__installationEventFired = true } } if (!Silverlight.disableAutoStartup) if (window.removeEventListener) window.removeEventListener("load", Silverlight.__startup, false); else window.detachEvent("onload", Silverlight.__startup) }; if (!Silverlight.disableAutoStartup) if (window.addEventListener) window.addEventListener("load", Silverlight.__startup, false); else window.attachEvent("onload", Silverlight.__startup); Silverlight.createObject = function (m, f, e, k, l, h, j) { var d = {}, a = k, c = l; d.version = a.version; a.source = m; d.alt = a.alt; if (h) a.initParams = h; if (a.isWindowless && !a.windowless) a.windowless = a.isWindowless; if (a.framerate && !a.maxFramerate) a.maxFramerate = a.framerate; if (e && !a.id) a.id = e; delete a.ignoreBrowserVer; delete a.inplaceInstallPrompt; delete a.version; delete a.isWindowless; delete a.framerate; delete a.data; delete a.src; delete a.alt; if (Silverlight.isInstalled(d.version)) { for (var b in c) if (c[b]) { if (b == "onLoad" && typeof c[b] == "function" && c[b].length != 1) { var i = c[b]; c[b] = function (a) { return i(document.getElementById(e), j, a) } } var g = Silverlight.__getHandlerName(c[b]); if (g != null) { a[b] = g; c[b] = null } else throw "typeof events." + b + " must be 'function' or 'string'"; } slPluginHTML = Silverlight.buildHTML(a) } else slPluginHTML = Silverlight.buildPromptHTML(d); if (f) f.innerHTML = slPluginHTML; else return slPluginHTML }; Silverlight.buildHTML = function (a) { var b = []; b.push('<object type="application/x-silverlight" data="data:application/x-silverlight,"'); if (a.id != null) b.push(' id="' + Silverlight.HtmlAttributeEncode(a.id) + '"'); if (a.width != null) b.push(' width="' + a.width + '"'); if (a.height != null) b.push(' height="' + a.height + '"'); b.push(" >"); delete a.id; delete a.width; delete a.height; for (var c in a) if (a[c]) b.push('<param name="' + Silverlight.HtmlAttributeEncode(c) + '" value="' + Silverlight.HtmlAttributeEncode(a[c]) + '" />'); b.push("</object>"); return b.join("") }; Silverlight.createObjectEx = function (b) { var a = b, c = Silverlight.createObject(a.source, a.parentElement, a.id, a.properties, a.events, a.initParams, a.context); if (a.parentElement == null) return c }; Silverlight.buildPromptHTML = function (b) { var a = "", d = Silverlight.fwlinkRoot, c = b.version; if (b.alt) a = b.alt; else { if (!c) c = ""; a = "<a href='javascript:Silverlight.getSilverlight(\"{1}\");' style='text-decoration: none;'><img src='{2}' alt='Get Microsoft Silverlight' style='border-style: none'/></a>"; a = a.replace("{1}", c); a = a.replace("{2}", d + "108181") } return a }; Silverlight.getSilverlight = function (e) { if (Silverlight.onGetSilverlight) Silverlight.onGetSilverlight(); var b = "", a = String(e).split("."); if (a.length > 1) { var c = parseInt(a[0]); if (isNaN(c) || c < 2) b = "1.0"; else b = a[0] + "." + a[1] } var d = ""; if (b.match(/^\d+\056\d+$/)) d = "&v=" + b; Silverlight.followFWLink("149156" + d) }; Silverlight.followFWLink = function (a) { top.location = Silverlight.fwlinkRoot + String(a) }; Silverlight.HtmlAttributeEncode = function (c) { var a, b = ""; if (c == null) return null; for (var d = 0; d < c.length; d++) { a = c.charCodeAt(d); if (a > 96 && a < 123 || a > 64 && a < 91 || a > 43 && a < 58 && a != 47 || a == 95) b = b + String.fromCharCode(a); else b = b + "&#" + a + ";" } return b }; Silverlight.default_error_handler = function (e, b) { var d, c = b.ErrorType; d = b.ErrorCode; var a = "\nSilverlight error message     \n"; a += "ErrorCode: " + d + "\n"; a += "ErrorType: " + c + "       \n"; a += "Message: " + b.ErrorMessage + "     \n"; if (c == "ParserError") { a += "XamlFile: " + b.xamlFile + "     \n"; a += "Line: " + b.lineNumber + "     \n"; a += "Position: " + b.charPosition + "     \n" } else if (c == "RuntimeError") { if (b.lineNumber != 0) { a += "Line: " + b.lineNumber + "     \n"; a += "Position: " + b.charPosition + "     \n" } a += "MethodName: " + b.methodName + "     \n" } alert(a) }; Silverlight.__cleanup = function () { for (var a = Silverlight._silverlightCount - 1; a >= 0; a--) window["__slEvent" + a] = null; Silverlight._silverlightCount = 0; if (window.removeEventListener) window.removeEventListener("unload", Silverlight.__cleanup, false); else window.detachEvent("onunload", Silverlight.__cleanup) }; Silverlight.__getHandlerName = function (b) { var a = ""; if (typeof b == "string") a = b; else if (typeof b == "function") { if (Silverlight._silverlightCount == 0) if (window.addEventListener) window.addEventListener("unload", Silverlight.__cleanup, false); else window.attachEvent("onunload", Silverlight.__cleanup); var c = Silverlight._silverlightCount++; a = "__slEvent" + c; window[a] = b } else a = null; return a }; Silverlight.onRequiredVersionAvailable = function () { }; Silverlight.onRestartRequired = function () { }; Silverlight.onUpgradeRequired = function () { }; Silverlight.onInstallRequired = function () { }; Silverlight.IsVersionAvailableOnError = function (d, a) { var b = false; try { if (a.ErrorCode == 8001 && !Silverlight.__installationEventFired) { Silverlight.onUpgradeRequired(); Silverlight.__installationEventFired = true } else if (a.ErrorCode == 8002 && !Silverlight.__installationEventFired) { Silverlight.onRestartRequired(); Silverlight.__installationEventFired = true } else if (a.ErrorCode == 5014 || a.ErrorCode == 2106) { if (Silverlight.__verifySilverlight2UpgradeSuccess(a.getHost())) b = true } else b = true } catch (c) { } return b }; Silverlight.IsVersionAvailableOnLoad = function (b) { var a = false; try { if (Silverlight.__verifySilverlight2UpgradeSuccess(b.getHost())) a = true } catch (c) { } return a }; Silverlight.__verifySilverlight2UpgradeSuccess = function (d) { var c = false, b = "4.0.50401", a = null; try { if (d.IsVersionSupported(b + ".99")) { a = Silverlight.onRequiredVersionAvailable; c = true } else if (d.IsVersionSupported(b + ".0")) a = Silverlight.onRestartRequired; else a = Silverlight.onUpgradeRequired; if (a && !Silverlight.__installationEventFired) { a(); Silverlight.__installationEventFired = true } } catch (e) { } return c };
+
+
+
+
+
+
+/**
+ * Does the browser not have the FileReader already
+ */
+(function(){
+
+  // Do we have the ability to drop files?
+  window.dropfile = true;
+
+  if (("FileReader" in window)){
+    return;
+  }
+
+  // Does browser support Silverlight?
+  if(!Silverlight.isInstalled()){
+    // nope set
+    window.dropfile = false;
+    return;
+  }
+
+  var path = (function (){
+    var s = document.getElementsByTagName('script'),
+      p = s[s.length-1];
+    return ((p.src?p.src:p.getAttribute('src')).match(/(.*\/)/) || [""])[0];
+  })();
+
+  var sl; // the Silverlight Widget
+  var el; // the current drop zone
+
+  // Attach the element to the page.
+  // ... if the body exists that is.
+  var attach = function(){
+
+    if(!document.getElementsByTagName('body').length){
+      return false;
+    }
+
+    /**
+     * Create the Silverlight Overlay, this will be moved into position once drop occurs
+     */
+    sl = document.createElement('div');
+    Silverlight.createObjectEx({
+      source: path + "dropfile.xap",
+      parentElement: sl,
+      id: "SilverlightControl",
+      properties: {
+        width: "100%",
+        height: "100%",
+        version: "2.0",
+        background: "#FFFFFF"
+        //   isWindowless:"True",
+        //   background: "#00FFFFFF"
+      }
+    });
+
+    // Position the silverlight container iniitally
+    sl.style.display = 'block';
+    sl.id = "SilverlightContainer";
+    sl.style.position = 'fixed';
+    sl.style.width = sl.style.height = "80px";
+
+    document.getElementsByTagName('body')[0].appendChild(sl);
+
+    // Hide by default
+    hide();
+
+    /**
+     * DragEnter + Event delegation,
+     * When a drag enter event occurs if the current target is a drop zone overlay element with the Silverlight app.
+     */
+    addEvent( (document.body||document), "dragenter", function(event) {
+      //IE doesn't pass in the event object
+      event = event || window.event;
+
+      //IE uses srcElement as the target
+      var _el = event.target || event.srcElement;
+      if(_el.id === "SilverlightControl" || _el.id === "SilverlightContainer" ){
+        return;
+      }
+      el = _el;
+
+      // Use the dragover events to keep the silver light widget under the mouse cursor
+      addEvent( el, "dragover", function (e) {
+        e = e || window.event;
+        // Define pageX and pageY if the window doesn't already have them defined.
+        if (!("pageX" in e)) {
+          e.pageX = e.clientX;
+          e.pageY = e.clientY;
+        }
+
+        sl.style.top =  ( e.pageY - 5 ) + "px";
+        sl.style.left = ( e.pageX - 5 ) + "px";
+      });
+      return false;
+    });
+
+    return true;
+
+  };
+
+  if(!attach()){
+    addEvent(window,'load',attach);
+  };
+
+  function hide(e) {
+    sl.style.left = sl.style.top = "-1000px";
+  }
+
+  /**
+   * Add eventlistner
+   */
+  function addEvent(el,name,func){
+    if(el.addEventListener){
+      el.removeEventListener(name, func, false);
+      el.addEventListener(name, func, false);
+    }
+    else {
+      el.detachEvent('on'+name, func);
+      el.attachEvent('on'+name, func);
+    }
+  }
+
+
+  /**
+   * Add Callback which will be triggered via silverlight
+   */
+  window.dropfile = function () {
+    // Instantly hide the SilverLight Application
+    hide(true);
+    // Drop the file
+    // We are trying to recreate an event here...
+    // this is very hacky and means we have to recreate everything in a typical event otherwise we can break code
+    var dataTransfer = { files: [] };
+
+    for (var i = 0; i < arguments.length; i++) {
+      // filename
+      var name = arguments[i].split(',')[0],
+        // data
+        base64 = arguments[i].split(',')[1],
+        // mime type based upon extension
+        mime = { png: "image/png",
+          jpg: "image/jpeg",
+          jpeg: "image/jpeg",
+          gif: "image/gif",
+          doc: "application/msword",
+          docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          xls: "application/vnd.ms-excel",
+          xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          pdf: "application/pdf",
+          zip: "application/x-zip-compressed",
+          rar: "application/x-rar-compressed"
+        }[name.toLowerCase().match(/[^\.]*$/)[0]] || "";
+
+      dataTransfer.files[i] = { name: name, size: base64.length, data: base64, type : mime }
+    }
+
+    // NEW SKOOL: Dispatch events
+    if(el.dispatchEvent){
+      try{
+        // IE9,FF3<>FF3.5
+        var dropEvent = document.createEvent("DragEvent");
+        // Fix binding with addEventListener
+        dropEvent.files = dataTransfer.files;
+        dropEvent.initDragEvent("drop", true, true, window, 0,
+          0, 0, 0, 0,
+          //event.screenX, event.screenY, event.clientX, event.clientY,
+          false, false, false, false,
+          //event.ctrlKey, event.altKey, event.shiftKey, event.metaKey,
+          0, null, dataTransfer);
+        el.dispatchEvent(dropEvent);
+      }
+      catch(e){
+        throw ("Whoops could not trigger the drop event");
+      }
+    }
+    // OLD SKOOL: Dispatch events
+    else if (el.fireEvent) {
+      try {
+        // <=IE8, <FF3
+        var dropEvent = document.createEventObject();
+        dropEvent.files = dataTransfer.files;
+        el.fireEvent('ondrop', dropEvent);
+      }catch(e){
+        // Error firing IE's event handlers
+        throw ("Whoops could not trigger the drop event");
+      }
+    }
+
+  };
+
+
+  /**
+   * Add FileReader to the window object
+   */
+  window.FileReader = function () {
+
+    this.onload;
+    this.result;
+    this.readAsDataURL = function (file) {
+      // Use the extension from the filename to determine the MIME-TYPE
+      this.read("data:" + file.type + ";base64," + file.data);
+    };
+    this.prototype.readAsBinaryString = function(file){
+      this.read(atob(file.data));
+    };
+    this.prototype.readAsText = function(file, encoding){
+      this.read(atob(file.data));
+    };
+    this.readAsArrayBuffer = function(file){
+      throw("Whoops FileReader.readAsArrayBuffer is unimplemented");
+    }
+
+    // Generic response
+    // Passes a fake ProgressEvent
+    this.read = function(result,opt){
+      this.result = result;
+      if (this.onload) {
+        this.onload({
+          target: { result: result }
+        });
+      }
+      else throw ("Please define the onload event handler first");
+    };
+  };
+
+
+})();
+
+
+/**
+ * Base64 Encoding as documented at...
+ * http://www.webtoolkit.info/javascript-base64.html
+ */
+/*
+ * base64.js - Base64 encoding and decoding functions
+ *
+ * See: http://developer.mozilla.org/en/docs/DOM:window.btoa
+ *      http://developer.mozilla.org/en/docs/DOM:window.atob
+ *
+ * Copyright (c) 2007, David Lindquist <david.lindquist@gmail.com>
+ * Released under the MIT license
+ *
+ * Modified by Andrew Dodson
+ */
+if(!('btoa' in window)){
+  function btoa(s) {
+    var c = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=',
+      e = [],
+      i = 0,
+      b,
+      buf;
+
+    while(i<s.length){
+      b = [s.charCodeAt(i++),s.charCodeAt(i++),s.charCodeAt(i++)];
+      buf = (b[0] << 16) + ((b[1] || 0) << 8) + (b[2] || 0);
+      e.push(
+        c.charAt((buf & (63 << 18)) >> 18),
+        c.charAt((buf & (63 << 12)) >> 12),
+        c.charAt(isNaN(b[1]) ? 64 : (buf & (63 << 6)) >> 6),
+        c.charAt(isNaN(b[2]) ? 64 : (buf & 63))
+      );
+    }
+    return e.join('');
+  }
+}
+
+if(!('atob' in window)) {
+  function atob(s) {
+    var c = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=',
+      buf,
+      a = b = d = [],
+      j = i = 0;
+
+    if ((s.length % 4 != 0) || (new RegExp('[^' + c + ']').test(s)) || (/=/.test(s) && (/=[^=]/.test(s) || /={3}/.test(s))))
+      throw new Error('Invalid base64 data');
+
+    while(i<s.length){
+      j=i;
+      a=[];
+      for(;i<j+4;i++)
+        a.push(c.indexOf(s.charAt(i)));
+
+      buf = (a[0] << 18) + (a[1] << 12) + ((a[2] & 63) << 6) + (a[3] & 63);
+      b = [((buf & (255 << 16)) >> 16), ((a[2] == 64) ? -1 : (buf & (255 << 8)) >> 8),((a[3] == 64) ? -1 : (buf & 255))];
+
+      for(j=0;j<3;j++)
+        if (b[j] >= 0||j===0)
+          d.push(String.fromCharCode(b[j]));
+    }
+    return d.join('');
+  }
+}
+
+if (!window.getComputedStyle) {
+  window.getComputedStyle = function(el, pseudo) {
+    this.el = el;
+    this.getPropertyValue = function(prop) {
+      var re = /(\-([a-z]){1})/g;
+      if (prop == 'float') prop = 'styleFloat';
+      if (re.test(prop)) {
+        prop = prop.replace(re, function () {
+          return arguments[2].toUpperCase();
+        });
+      }
+      return el.currentStyle[prop] ? el.currentStyle[prop] : null;
+    }
+    return this;
+  }
+}
+/*
+* @Author: Jeffrey Wang
+* @Desc:  整理强大的 SheetJS 功能，依赖 XLSX.js 和 FileSaver
+* @Version: v1.4
+* @Date:   2018-03-24 09:54:17
+* @Last Modified by:   Jeffrey Wang
+* @Last Modified time: 2019-01-15 11:49:09
+*/
+layui.define(['jquery'], function(exports){
+	var $ = layui.jquery;
+	exports('excel', {
+		/**
+		 * 兼容老版本的导出函数
+		 * @param  {[type]} data     [description]
+		 * @param  {[type]} filename [description]
+		 * @param  {[type]} type     [description]
+		 * @return {[type]}          [description]
+		 */
+		downloadExl: function(data, filename, type) {
+			type = type ? type : 'xlsx';
+			this.exportExcel({sheet1: data}, filename+'.'+type, type);
+		},
+		/**
+		 * 导出Excel并弹出下载框，具体使用方法和范围请参考文档
+		 * @param  {[type]} data     [description]
+		 * @param  {[type]} filename [description]
+		 * @param  {[type]} type     [description]
+		 * @param  {[type]} opt      [description]
+		 * @return {[type]}          [description]
+		 */
+		exportExcel : function(data, filename, type, opt) {
+			type = type ? type : 'xlsx';
+			filename = filename ? filename : '导出数据.'+type;
+
+			// 创建一个 XLSX 对象
+			var wb = XLSX.utils.book_new();
+			// 1. 定义excel对的基本属性
+			var Props = {
+				Title: filename,
+				Subject: 'Export From web browser',
+				Author: "excel.wj2015.com",
+				Manager: '',
+				Company: '',
+				Category: '',
+				Keywords: '',
+				Comments: '',
+				LastAuthor: '',
+				CreatedData: new Date(),
+			};
+			opt && opt.Props && (Props = $.extend(Props, opt.Props));
+			wb.Props = Props;
+			// 特殊属性实现，比如合并单元格
+			var wbExtend = {
+				'!merges': null
+				,'!margins': null
+				,'!cols': null
+				,'!rows': null
+				,'!protect': null
+				,'!autofilter': null
+			};
+			opt && opt.extend && (wbExtend = $.extend(wbExtend, opt.extend));
+			// 清理空配置
+			for (key in wbExtend) {
+				if (!wbExtend[key]) {
+					delete wbExtend[key];
+				}
+			}
+
+			// 判断 data 如果是 sheet 级别数据，自动加 sheet1
+			if ($.isArray(data)) {
+				data = {sheet1: data};
+			}
+
+			for(sheet_name in data) {
+				var content = data[sheet_name];
+				// 2. 设置sheet名称
+				wb.SheetNames.push(sheet_name);
+				// 3. 分配工作表对象到 sheet
+				var is_aoa = false;
+				if (content.length && content[0] && $.isArray(content[0])) {
+					is_aoa = true;
+				}
+				if (is_aoa) {
+					var ws = XLSX.utils.aoa_to_sheet(content);
+				} else {
+					var option = {};
+					if (content.length) {
+						option.headers = content.unshift();
+						option.skipHeader = true;
+						// 分离并重组样式
+						var splitRes = this.splitContent(content);
+					}
+					var ws = XLSX.utils.json_to_sheet(content, option);
+					// 特殊属性，支持单独设置某个sheet的属性
+					if (wbExtend[sheet_name]) {
+						$.extend(ws, wbExtend[sheet_name]);
+					} else {
+						$.extend(ws, wbExtend);
+					}
+					// 合并样式
+					if (typeof splitRes !== 'undefined') {
+						this.mergeCellOpt(ws, splitRes.style);
+					}
+				}
+				wb.Sheets[sheet_name] = ws;
+			};
+
+			// 4. 输出工作表
+			var wbout = XLSX.write(wb, {bookType: type, type: 'binary', cellStyles: true});
+
+			// 5. 跨浏览器支持，采用 FileSaver 三方库
+			saveAs(new Blob([this.s2ab(wbout)], {type: "application/octet-stream"}), filename);
+		},
+		/**
+		 * 分离内容和样式
+		 * @param  {[type]} content [description]
+		 * @return {[type]}         [description]
+		 */
+		splitContent: function(content) {
+			var styleContent = {};
+			// 扫描每个单元格，如果是对象则等表格转换完毕后分离出来重新赋值
+			for (line in content) {
+				var lineData = content[line];
+				var rowIndex = 0;
+				for (var row in lineData) {
+					var rowData = lineData[row];
+					var t = typeof rowData;
+					if (typeof rowData === 'object') {
+						// typeof null == object
+						if (rowData !== null) {
+							styleContent[this.numToTitle(rowIndex+1)+(parseInt(line)+1)] = rowData;
+						} else {
+							lineData[row] = '';
+						}
+					}
+					rowIndex++;
+				}
+			}
+			return {
+				content: content,
+				style: styleContent,
+			};
+		},
+		/**
+		 * 合并内容和样式
+		 * @param  {[type]} ws    [description]
+		 * @param  {[type]} style [description]
+		 * @return {[type]}       [description]
+		 */
+		mergeCellOpt: function(ws, style) {
+			for (var row in style) {
+				var rowOpt = style[row];
+				if (ws[row]) {
+					// 其他属性做一个初始化
+					var otherOpt = ['t', 'w', 'f', 'r', 'h', 'c', 'z', 'l', 's'];
+					for (var i in otherOpt) {
+						ws[row][otherOpt[i]] = ws[row][otherOpt[i]];
+					}
+					$.extend(ws[row], rowOpt);
+				}
+			}
+		},
+		// 测试代码：
+		// 		for(i=1;i<100;i++){var change = layui.excel.numToTitle(i);console.log(i, change, layui.excel.titleToNum(change));}
+		// numsToTitle备忘录提效
+		numsTitleCache: {},
+		// titleToTitle 备忘录提效
+		titleNumsCache: {},
+		/**
+		 * 将数字(从一开始)转换为 A、B、C...AA、AB
+		 * @param  {[int]} num [description]
+		 * @return {[type]}     [description]
+		 */
+		numToTitle: function(num) {
+			if (this.numsTitleCache[num]) {
+				return this.numsTitleCache[num];
+			}
+			var ans = '';
+			if (num > 26) {
+				// 要注意小心 26 的倍数导致的无线递归问题
+				var dec = num % 26;
+				ans = this.numToTitle((num - dec)/26) + this.numToTitle(dec?dec:26);
+				this.numsTitleCache[num] = ans;
+				this.titleNumsCache[ans] = num;
+				return ans;
+			} else {
+				// A 的 ascii 为 0，顺位相加
+				ans = String.fromCharCode(64 + num);
+				this.numsTitleCache[num] = ans;
+				this.titleNumsCache[ans] = num;
+				return ans;
+			}
+		},
+		/**
+		 * 将A、B、AA、ABC转换为 1、2、3形式的数字
+		 * @param  {[type]} title [description]
+		 * @return {[type]}       [description]
+		 */
+		titleToNum: function(title) {
+			if (this.titleNumsCache[title]) {
+				return this.titleNumsCache[title];
+			}
+			var len = title.length;
+			var total = 0;
+			for (var index in title) {
+				var char = title[index];
+				var code = char.charCodeAt() - 64;
+				total += code * Math.pow(26, len - index - 1);
+			}
+			this.numsTitleCache[total] = title;
+			this.titleNumsCache[title] = total;
+			return total;
+		},
+		/**
+		 * 批量设置单元格属性
+		 * @param  {[array]} data     [sheet级别的数据]
+		 * @param  {[string]} range		 [范围字符串，比如 A1:C12，开始位置默认 A1，结束位置默认整个表格右下角]
+		 * @param  {[object]} config   [批量设置的单元格属性]
+		 * @param  {[callback]} filter   [回调函数，传递函数生效，返回值作为新的值（可用于过滤、规则替换样式等骚操作）]
+		 * @return {[array]}          [重新渲染后的 sheet 数据]
+		 */
+		setExportCellStyle: function(data, range, config, filter) {
+			if (typeof data !== 'object' || !data.length || !data[0] || !Object.keys(data[0]).length) {
+				return [];
+			}
+
+			// 以 rowIndex 为键，field 为值
+			var fieldKeys = Object.keys(data[0]);
+			var maxCol = data.length -1;
+			var maxRow = fieldKeys.length - 1;
+			// 默认 A1 ~ 右下角
+			var startPos = {c: 0, r: 0};
+			var endPos = {c: maxCol, r: maxRow};
+
+			if (range && typeof range === 'string') {
+				var rangeArr = range.split(':');
+				if (rangeArr[0].length) {
+					startPos = this.splitPosition(rangeArr[0]);
+				}
+				if (typeof rangeArr[1] !== 'undefined' && rangeArr[1] !== '') {
+					endPos = this.splitPosition(rangeArr[1]);
+				}
+			} else {
+				// pass
+			}
+			// position范围限制 - 考虑到特殊情况取消此限制
+			// startPos.c = startPos.c < maxCol ? startPos.c : maxCol;
+			// endPos.c = endPos.c < maxCol ? endPos.c : maxCol;
+			// startPos.r = startPos.r < maxRow ? startPos.r : maxRow;
+			// endPos.r = endPos.r < maxRow ? endPos.r : maxRow;
+
+			if (startPos.c > endPos.c) {
+				console.error('开始列不得大于结束列');
+			}
+            if (startPos.r > endPos.r) {
+                console.error('开始行不得大于结束行');
+            }
+
+			// 遍历范围内的数据，进行样式设置，按从上到下从左到右按行遍历
+            for (var currentCol = startPos.c; currentCol <= endPos.c; currentCol++) {
+                for (var currentRow = startPos.r; currentRow <= endPos.r; currentRow++) {
+                    // 如果有回调则执行回调判断，否则全部更新，如果遇到超出数据范围的，自动置空
+					var row = data[currentCol];
+					if (!row) {
+						row = {};
+						for (var key in fieldKeys) {
+							row[fieldKeys[key]] = '';
+						}
+						data[currentCol] = row;
+					}
+					var cell = row[fieldKeys[currentRow]];
+					var newCell = null;
+                    if (cell === null || cell === undefined) {
+                        cell = '';
+                    }
+
+                    // 手工合并
+                    if (typeof cell === 'object') {
+                        newCell = $.extend(true, {}, cell, config);
+                    } else {
+                        newCell = $.extend(true, {}, {v: cell}, config);
+                    }
+
+					if (
+						typeof filter === 'function'
+					) {
+						newCell = filter(cell, newCell, row, config, currentRow, currentCol, fieldKeys[currentRow]);
+					} else {
+					}
+					// 回写
+					data[currentCol][fieldKeys[currentRow]] = newCell;
+                }
+            }
+            return data;
+		},
+		/**
+		 * 合并单元格快速生成配置的函数 传入 [ ['开始坐标 A1', '结束坐标 D2'], ['开始坐标 B2', '结束坐标 E3'] ]
+		 * @param  {[type]} origin [description]
+		 * @return {[type]}        [description]
+		 */
+		makeMergeConfig: function(origin) {
+			var merge = [];
+			for (var index in origin) {
+				merge.push({
+					s: this.splitPosition(origin[index][0]),
+					e: this.splitPosition(origin[index][1]),
+				});
+			}
+			return merge;
+		},
+		/**
+		 * 自动生成列宽配置
+		 * @param  {[type]} data    [description]
+		 * @param  {[type]} defaultNum [description]
+		 * @return {[type]}         [description]
+		 */
+		makeColConfig: function(data, defaultNum) {
+			defaultNum = defaultNum > 0 ? defaultNum : 50;
+			// 将列的 ABC 转换为 index
+			var change = [];
+			var startIndex = 0;
+			for (index in data) {
+				var item = data[index];
+				if (index.match && index.match(/[A-Z]*/)) {
+					var currentIndex = this.titleToNum(index) - 1;
+					// 填充未配置的单元格
+					while (startIndex < currentIndex) {
+						change.push({wpx: defaultNum});
+						startIndex++;
+					}
+					startIndex = currentIndex+1;
+					change.push({wpx: item > 0 ? item : defaultNum});
+				}
+			};
+			return change;
+		},
+		/**
+		 * 自动生成列高配置
+		 * @param  {[type]} data    [description]
+		 * @param  {[type]} defaultNum [description]
+		 * @return {[type]}         [description]
+		 */
+		makeRowConfig: function(data, defaultNum) {
+			defaultNum = defaultNum > 0 ? defaultNum : 10;
+			// 将列的 ABC 转换为 index
+			var change = [];
+			var startIndex = 0;
+			for (index in data) {
+				var item = data[index];
+				if (index.match && index.match(/[0-9]*/)) {
+					var currentIndex = parseInt(index) - 1;
+					// 填充未配置的行
+					while (startIndex < currentIndex) {
+						change.push({hpx: defaultNum});
+						startIndex++;
+					}
+					startIndex = currentIndex+1;
+					change.push({hpx: item > 0 ? item : defaultNum});
+				}
+			};
+			return change;
+		},
+		/**
+		 * 将A1分离成 {c: 0, r: 0} 格式的数据
+		 * @param  {[type]} pos [description]
+		 * @return {[type]}     [description]
+		 */
+		splitPosition: function(pos) {
+			var res = pos.match('^([A-Z]+)([0-9]+)$');
+			if (!res) {
+				return {c: 0, r: 0};
+			}
+			// 转换结果相比需要的结果需要减一转换
+			return {
+				c: this.titleToNum(res[1]) - 1,
+				r: parseInt(res[2]) - 1
+			}
+		},
+		/**
+		 * 将二进制数据转为8位字节
+		 * @param  {[type]} s [description]
+		 * @return {[type]}   [description]
+		 */
+		s2ab: function(s) {
+			var buf = new ArrayBuffer(s.length);
+			var view = new Uint8Array(buf);
+			for (var i = 0; i < s.length; i++) {
+				view[i] = s.charCodeAt(i) & 0xFF;
+			}
+			return buf;
+		},
+		/**
+		 * 将导出的数据格式，转换为可以aoa导出的格式
+		 * @return {[type]} [description]
+		 */
+		filterDataToAoaData: function(filterData){
+			var aoaData = [];
+			layui.each(filterData, function(index, item) {
+				var itemData = [];
+				for (var i in item) {
+					itemData.push(item[i]);
+				}
+				aoaData.push(itemData);
+			});
+			return aoaData;
+		},
+		/**
+		 * 梳理导出的数据，包括字段排序和多余数据过滤，具体功能请参见文档
+		 * @param  {[type]} data   [需要梳理的数据]
+		 * @param  {[type]} fields [支持数组和对象，用于映射关系和字段排序]
+		 * @return {[type]}        [description]
+		 */
+		filterExportData: function(data, fields) {
+			// PS:之所以不直接引用 data 节省内存，是因为担心如果 fields 可能存在如下情况： { "id": 'test_id', 'test_id': 'new_id' }，会导致处理异常
+			var exportData = [];
+			var true_fields = [];
+			// filed 支持两种模式，数组则单纯排序，对象则转换映射关系，为了统一处理，将数组转换为符合要求的映射关系对象
+			if (Array.isArray(fields)) {
+				for (var i in fields) {
+					true_fields[fields[i]] = fields[i];
+				}
+			} else {
+				true_fields = fields;
+			}
+			for (i in data) {
+				var item = data[i];
+				exportData[i] = {};
+				for (key in true_fields) {
+					var new_field_name = key;
+					var old_field_name = true_fields[key];
+					// 如果传入的是回调，则回调的值则为新值
+					if (typeof old_field_name === 'function' && old_field_name.apply) {
+						exportData[i][new_field_name] = old_field_name.apply(window, [item[new_field_name], item, data]);
+					} else {
+						if (typeof item[old_field_name] !== 'undefined') {
+							exportData[i][new_field_name] = item[old_field_name];
+						} else {
+							exportData[i][new_field_name] = '';
+						}
+					}
+				}
+			}
+			return exportData;
+		},
+		/**
+		 * 梳理导入的数据，参数意义可参考 filterExportData
+		 * @param  {[type]} data   [description]
+		 * @param  {[type]} fields [description]
+		 * @return {[type]}        [description]
+		 */
+		filterImportData: function(data, fields) {
+			var that = this;
+			layui.each(data, function(fileindex, xlsx) {
+				layui.each(xlsx, function(sheetname, content) {
+					xlsx[sheetname] = that.filterExportData(content, fields);
+				});
+			});
+			return data;
+		},
+		/**
+		 * 读取Excel，支持多文件多表格读取
+		 * @param  {[type]}   files    [description]
+		 * @param  {[type]}   opt      [description]
+		 * @param  {Function} callback [description]
+		 * @return {[type]}            [description]
+		 */
+		importExcel: function(files, opt, callback) {
+			var option = {
+				header: 'A',
+				range: null,
+				fields: null,
+			};
+			$.extend(option, opt);
+			var that = this;
+
+			if (files.length < 1) {
+				throw {code: 999, 'message': '传入文件为空'};
+			}
+			var supportReadMime = [
+				'application/vnd.ms-excel',
+				'application/msexcel',
+				'application/x-msexcel',
+				'application/x-ms-excel',
+				'application/x-excel',
+				'application/x-dos_ms_excel',
+				'application/xls',
+				'application/x-xls',
+				'application/vnd-xls',
+				'application/csv',
+				'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+				''
+			];
+			layui.each(files, function(index, item) {
+				if (supportReadMime.indexOf(item.type) === -1) {
+					throw {code: 999, message: item.name+'（'+item.type+'）为不支持的文件类型'};
+				}
+			});
+
+			// 按照二进制读取
+			var data = {};
+			layui.each(files, function(index, item) {
+				var reader = new FileReader();
+				if (!reader) {
+					throw {code: 999, message: '不支持FileReader，请更换更新的浏览器'};
+				}
+				// 读取excel表格对象
+				reader.onload = function(ev) {
+					var wb = XLSX.read(ev.target.result, {
+						type: 'binary'
+					});
+					var excelData = {};
+					layui.each(wb.Sheets, function(sheet, sheetObj) {
+						// 全为空的去掉
+						if (wb.Sheets.hasOwnProperty(sheet)) {
+							var opt = {
+								header: option.header
+							};
+							if (option.range) {
+								opt.range = option.range;
+							}
+							excelData[sheet] = XLSX.utils.sheet_to_json(sheetObj, opt);
+							// 支持梳理数据
+							if (option.fields) {
+								excelData[sheet] = that.filterExportData(excelData[sheet], option.fields);
+							}
+						}
+					});
+					data[index] = excelData;
+					// 全部读取完毕才执行
+					if (index === files.length - 1) {
+						callback && callback.apply && callback.apply(window, [data]);
+					}
+				};
+				reader.readAsBinaryString(item);
+			});
+		}
+	});
+});
